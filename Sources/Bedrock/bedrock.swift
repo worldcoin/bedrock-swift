@@ -484,6 +484,24 @@ fileprivate struct FfiConverterString: FfiConverter {
     }
 }
 
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterData: FfiConverterRustBuffer {
+    typealias SwiftType = Data
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Data {
+        let len: Int32 = try readInt(&buf)
+        return Data(try readBytes(&buf, count: Int(len)))
+    }
+
+    public static func write(_ value: Data, into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        writeBytes(&buf, value)
+    }
+}
+
 
 
 
@@ -662,6 +680,15 @@ public protocol HexEncodedDataProtocol: AnyObject, Sendable {
      */
     func toHexString()  -> String
     
+    /**
+     * Converts the wrapped hex string into a `Bytes` struct.
+     *
+     * # Errors
+     * - `PrimitiveError::Generic` in the unexpected case that the hex string is not validly encoded hex data.
+     * This should never happen as this is verified on initialization.
+     */
+    func toVec() throws  -> Data
+    
 }
 /**
  * A wrapper around hex-encoded bytes (may or may not be a number).
@@ -750,6 +777,20 @@ public convenience init(s: String)throws  {
 open func toHexString() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
     uniffi_bedrock_fn_method_hexencodeddata_to_hex_string(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+    /**
+     * Converts the wrapped hex string into a `Bytes` struct.
+     *
+     * # Errors
+     * - `PrimitiveError::Generic` in the unexpected case that the hex string is not validly encoded hex data.
+     * This should never happen as this is verified on initialization.
+     */
+open func toVec()throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypePrimitiveError_lift) {
+    uniffi_bedrock_fn_method_hexencodeddata_to_vec(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -1147,11 +1188,11 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
     func personalSign(chainId: UInt32, message: String) throws  -> HexEncodedData
     
     /**
-     * Crafts and signs a 4337 user operation.
+     * Crafts and signs a 4337 user operation on behalf of the Safe Smart Account.
      *
      * # Arguments
-     * - `user_operation`: The user operation to sign.
      * - `chain_id`: The chain ID of the chain where the user operation is being signed.
+     * - `user_operation`: The user operation to sign.
      *
      * # Errors
      * - Will throw an error if the user operation is invalid, particularly if any attribute is not valid.
@@ -1187,12 +1228,59 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
      * factory_data: None,
      * };
      *
-     * let signature = safe.sign_4337_op(&user_op, 480).unwrap();
+     * let signature = safe.sign_4337_op(480, &user_op).unwrap();
      *
      * println!("Signature: {}", signature.to_hex_string());
      * ```
      */
-    func sign4337Op(userOperation: UserOperation, chainId: UInt32) throws  -> HexEncodedData
+    func sign4337Op(chainId: UInt32, userOperation: UserOperation) throws  -> HexEncodedData
+    
+    /**
+     * Signs a `Permit2` transfer on behalf of the Safe Smart Account.
+     *
+     * Used by Mini Apps where users approve transfers for specific tokens and amounts for a period of time on their behalf.
+     *
+     * # Arguments
+     * - `chain_id`: The chain ID of the chain where the message is being signed.
+     * - `transfer`: The `Permit2` transfer to sign.
+     *
+     * # Errors
+     * - Will throw an error if the transfer is invalid, particularly if any attribute is not valid.
+     * - Will throw an error if the signature process unexpectedly fails.
+     */
+    func signPermit2Transfer(chainId: UInt32, transfer: Permit2TransferFrom) throws  -> HexEncodedData
+    
+    /**
+     * Signs a transaction on behalf of the Safe Smart Account.
+     *
+     * This allows execution of normal transactions for the Safe.
+     *
+     * # Arguments
+     * - `chain_id`: The chain ID of the chain where the transaction is being signed.
+     * - `transaction`: The transaction to sign.
+     *
+     * # Errors
+     * - Will throw an error if the transaction is invalid, particularly if any attribute is not valid.
+     * - Will throw an error if the signature process unexpectedly fails.
+     */
+    func signTransaction(chainId: UInt32, transaction: SafeTransaction) throws  -> HexEncodedData
+    
+    /**
+     * Signs an arbitrary EIP-712 typed data message on behalf of the Safe Smart Account.
+     *
+     * Please note that certain primary types are restricted and cannot be signed. For example Permit2's `PermitTransferFrom` is restricted.
+     *
+     * # Arguments
+     * - `chain_id`: The chain ID of the chain where the message is being signed. While technically the chain ID is a `U256` in EVM, we limit
+     * to sensible `u32` (which works well with foreign code).
+     * - `stringified_typed_data`: A JSON string representing the typed data as per EIP-712.
+     *
+     * # Errors
+     * - Will throw an error if the typed data is not a valid JSON string.
+     * - Will throw an error if the typed data is not a valid EIP-712 typed data message.
+     * - Will throw an error if the signature process unexpectedly fails.
+     */
+    func signTypedData(chainId: UInt32, stringifiedTypedData: String) throws  -> HexEncodedData
     
 }
 /**
@@ -1298,11 +1386,11 @@ open func personalSign(chainId: UInt32, message: String)throws  -> HexEncodedDat
 }
     
     /**
-     * Crafts and signs a 4337 user operation.
+     * Crafts and signs a 4337 user operation on behalf of the Safe Smart Account.
      *
      * # Arguments
-     * - `user_operation`: The user operation to sign.
      * - `chain_id`: The chain ID of the chain where the user operation is being signed.
+     * - `user_operation`: The user operation to sign.
      *
      * # Errors
      * - Will throw an error if the user operation is invalid, particularly if any attribute is not valid.
@@ -1338,16 +1426,84 @@ open func personalSign(chainId: UInt32, message: String)throws  -> HexEncodedDat
      * factory_data: None,
      * };
      *
-     * let signature = safe.sign_4337_op(&user_op, 480).unwrap();
+     * let signature = safe.sign_4337_op(480, &user_op).unwrap();
      *
      * println!("Signature: {}", signature.to_hex_string());
      * ```
      */
-open func sign4337Op(userOperation: UserOperation, chainId: UInt32)throws  -> HexEncodedData  {
+open func sign4337Op(chainId: UInt32, userOperation: UserOperation)throws  -> HexEncodedData  {
     return try  FfiConverterTypeHexEncodedData_lift(try rustCallWithError(FfiConverterTypeSafeSmartAccountError_lift) {
     uniffi_bedrock_fn_method_safesmartaccount_sign_4337_op(self.uniffiClonePointer(),
-        FfiConverterTypeUserOperation_lower(userOperation),
-        FfiConverterUInt32.lower(chainId),$0
+        FfiConverterUInt32.lower(chainId),
+        FfiConverterTypeUserOperation_lower(userOperation),$0
+    )
+})
+}
+    
+    /**
+     * Signs a `Permit2` transfer on behalf of the Safe Smart Account.
+     *
+     * Used by Mini Apps where users approve transfers for specific tokens and amounts for a period of time on their behalf.
+     *
+     * # Arguments
+     * - `chain_id`: The chain ID of the chain where the message is being signed.
+     * - `transfer`: The `Permit2` transfer to sign.
+     *
+     * # Errors
+     * - Will throw an error if the transfer is invalid, particularly if any attribute is not valid.
+     * - Will throw an error if the signature process unexpectedly fails.
+     */
+open func signPermit2Transfer(chainId: UInt32, transfer: Permit2TransferFrom)throws  -> HexEncodedData  {
+    return try  FfiConverterTypeHexEncodedData_lift(try rustCallWithError(FfiConverterTypeSafeSmartAccountError_lift) {
+    uniffi_bedrock_fn_method_safesmartaccount_sign_permit2_transfer(self.uniffiClonePointer(),
+        FfiConverterUInt32.lower(chainId),
+        FfiConverterTypePermit2TransferFrom_lower(transfer),$0
+    )
+})
+}
+    
+    /**
+     * Signs a transaction on behalf of the Safe Smart Account.
+     *
+     * This allows execution of normal transactions for the Safe.
+     *
+     * # Arguments
+     * - `chain_id`: The chain ID of the chain where the transaction is being signed.
+     * - `transaction`: The transaction to sign.
+     *
+     * # Errors
+     * - Will throw an error if the transaction is invalid, particularly if any attribute is not valid.
+     * - Will throw an error if the signature process unexpectedly fails.
+     */
+open func signTransaction(chainId: UInt32, transaction: SafeTransaction)throws  -> HexEncodedData  {
+    return try  FfiConverterTypeHexEncodedData_lift(try rustCallWithError(FfiConverterTypeSafeSmartAccountError_lift) {
+    uniffi_bedrock_fn_method_safesmartaccount_sign_transaction(self.uniffiClonePointer(),
+        FfiConverterUInt32.lower(chainId),
+        FfiConverterTypeSafeTransaction_lower(transaction),$0
+    )
+})
+}
+    
+    /**
+     * Signs an arbitrary EIP-712 typed data message on behalf of the Safe Smart Account.
+     *
+     * Please note that certain primary types are restricted and cannot be signed. For example Permit2's `PermitTransferFrom` is restricted.
+     *
+     * # Arguments
+     * - `chain_id`: The chain ID of the chain where the message is being signed. While technically the chain ID is a `U256` in EVM, we limit
+     * to sensible `u32` (which works well with foreign code).
+     * - `stringified_typed_data`: A JSON string representing the typed data as per EIP-712.
+     *
+     * # Errors
+     * - Will throw an error if the typed data is not a valid JSON string.
+     * - Will throw an error if the typed data is not a valid EIP-712 typed data message.
+     * - Will throw an error if the signature process unexpectedly fails.
+     */
+open func signTypedData(chainId: UInt32, stringifiedTypedData: String)throws  -> HexEncodedData  {
+    return try  FfiConverterTypeHexEncodedData_lift(try rustCallWithError(FfiConverterTypeSafeSmartAccountError_lift) {
+    uniffi_bedrock_fn_method_safesmartaccount_sign_typed_data(self.uniffiClonePointer(),
+        FfiConverterUInt32.lower(chainId),
+        FfiConverterString.lower(stringifiedTypedData),$0
     )
 })
 }
@@ -1663,6 +1819,447 @@ public func FfiConverterTypeToolingDemo_lower(_ value: ToolingDemo) -> UnsafeMut
 }
 
 
+
+
+/**
+ * For Swift & Kotlin usage only.
+ *
+ * The token and amount details for a transfer signed in the permit transfer signature.
+ *
+ * Reference: <https://github.com/Uniswap/permit2/blob/cc56ad0f3439c502c246fc5cfcc3db92bb8b7219/src/interfaces/ISignatureTransfer.sol#L22>
+ */
+public struct Permit2TokenPermissions {
+    /**
+     * ERC-20 token address
+     * Solidity type: `address`
+     */
+    public var token: String
+    /**
+     * The maximum amount of tokens that can be transferred
+     * Solidity type: `uint256`
+     */
+    public var amount: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * ERC-20 token address
+         * Solidity type: `address`
+         */token: String, 
+        /**
+         * The maximum amount of tokens that can be transferred
+         * Solidity type: `uint256`
+         */amount: String) {
+        self.token = token
+        self.amount = amount
+    }
+}
+
+#if compiler(>=6)
+extension Permit2TokenPermissions: Sendable {}
+#endif
+
+
+extension Permit2TokenPermissions: Equatable, Hashable {
+    public static func ==(lhs: Permit2TokenPermissions, rhs: Permit2TokenPermissions) -> Bool {
+        if lhs.token != rhs.token {
+            return false
+        }
+        if lhs.amount != rhs.amount {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(token)
+        hasher.combine(amount)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePermit2TokenPermissions: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Permit2TokenPermissions {
+        return
+            try Permit2TokenPermissions(
+                token: FfiConverterString.read(from: &buf), 
+                amount: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: Permit2TokenPermissions, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.token, into: &buf)
+        FfiConverterString.write(value.amount, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePermit2TokenPermissions_lift(_ buf: RustBuffer) throws -> Permit2TokenPermissions {
+    return try FfiConverterTypePermit2TokenPermissions.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePermit2TokenPermissions_lower(_ value: Permit2TokenPermissions) -> RustBuffer {
+    return FfiConverterTypePermit2TokenPermissions.lower(value)
+}
+
+
+/**
+ * For Swift & Kotlin usage only.
+ *
+ * Allows foreign code to construct a signed permit message for a single token transfer.
+ *
+ * [Permit2](https://docs.uniswap.org/contracts/permit2/overview) is an extension to EIP-2612 that allows for more efficient token approvals.
+ *
+ * In World App, Permit2 is used to approve tokens for a Mini App spender to transfer on behalf of the user.
+ *
+ * Reference: <https://github.com/Uniswap/permit2/blob/cc56ad0f3439c502c246fc5cfcc3db92bb8b7219/src/interfaces/ISignatureTransfer.sol#L30>
+ */
+public struct Permit2TransferFrom {
+    /**
+     * The token and amount allowed for transfers.
+     */
+    public var permitted: Permit2TokenPermissions
+    /**
+     * The address of the spender
+     * Solidity type: `address`
+     */
+    public var spender: String
+    /**
+     * A unique value for every token owner's signature to prevent signature replays
+     * Solidity type: `uint256`
+     */
+    public var nonce: String
+    /**
+     * The expiration timestamp on the permit signature
+     * Solidity type: `uint256`
+     */
+    public var deadline: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The token and amount allowed for transfers.
+         */permitted: Permit2TokenPermissions, 
+        /**
+         * The address of the spender
+         * Solidity type: `address`
+         */spender: String, 
+        /**
+         * A unique value for every token owner's signature to prevent signature replays
+         * Solidity type: `uint256`
+         */nonce: String, 
+        /**
+         * The expiration timestamp on the permit signature
+         * Solidity type: `uint256`
+         */deadline: String) {
+        self.permitted = permitted
+        self.spender = spender
+        self.nonce = nonce
+        self.deadline = deadline
+    }
+}
+
+#if compiler(>=6)
+extension Permit2TransferFrom: Sendable {}
+#endif
+
+
+extension Permit2TransferFrom: Equatable, Hashable {
+    public static func ==(lhs: Permit2TransferFrom, rhs: Permit2TransferFrom) -> Bool {
+        if lhs.permitted != rhs.permitted {
+            return false
+        }
+        if lhs.spender != rhs.spender {
+            return false
+        }
+        if lhs.nonce != rhs.nonce {
+            return false
+        }
+        if lhs.deadline != rhs.deadline {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(permitted)
+        hasher.combine(spender)
+        hasher.combine(nonce)
+        hasher.combine(deadline)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePermit2TransferFrom: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Permit2TransferFrom {
+        return
+            try Permit2TransferFrom(
+                permitted: FfiConverterTypePermit2TokenPermissions.read(from: &buf), 
+                spender: FfiConverterString.read(from: &buf), 
+                nonce: FfiConverterString.read(from: &buf), 
+                deadline: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: Permit2TransferFrom, into buf: inout [UInt8]) {
+        FfiConverterTypePermit2TokenPermissions.write(value.permitted, into: &buf)
+        FfiConverterString.write(value.spender, into: &buf)
+        FfiConverterString.write(value.nonce, into: &buf)
+        FfiConverterString.write(value.deadline, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePermit2TransferFrom_lift(_ buf: RustBuffer) throws -> Permit2TransferFrom {
+    return try FfiConverterTypePermit2TransferFrom.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePermit2TransferFrom_lower(_ value: Permit2TransferFrom) -> RustBuffer {
+    return FfiConverterTypePermit2TransferFrom.lower(value)
+}
+
+
+/**
+ * For Swift & Kotlin usage only.
+ *
+ * Represents a Safe Smart Account transaction which can be initialized by foreign code to be then signed.
+ *
+ * Reference: <https://github.com/safe-global/safe-smart-account/blob/v1.4.1/contracts/Safe.sol#L139>
+ */
+public struct SafeTransaction {
+    /**
+     * Destination address of the Safe transaction.
+     * Solidity type: `address`
+     */
+    public var to: String
+    /**
+     * Ether value of the Safe transaction.
+     * Solidity type: `uint256`
+     */
+    public var value: String
+    /**
+     * Data payload of the Safe transaction.
+     * Solidity type: `bytes`
+     */
+    public var data: String
+    /**
+     * The type of operation to perform on behalf of the Safe Smart Account.
+     * Solidity type: `uint8`
+     */
+    public var operation: SafeOperation
+    /**
+     * The maximum gas that can be used for the Safe transaction.
+     * Solidity type: `uint256`
+     */
+    public var safeTxGas: String
+    /**
+     * Gas costs that are independent of the transaction execution (e.g. base transaction fee, signature check, payment of the refund)
+     * Solidity type: `uint256`
+     */
+    public var baseGas: String
+    /**
+     * Gas price that should be used for the payment calculation.
+     * Solidity type: `uint256`
+     */
+    public var gasPrice: String
+    /**
+     * Token address (or 0 if ETH) that is used for the payment.
+     * Solidity type: `address`
+     */
+    public var gasToken: String
+    /**
+     * Address of receiver of gas payment (or 0 if tx.origin).
+     * Solidity type: `address`
+     */
+    public var refundReceiver: String
+    /**
+     * The sequential nonce of the transaction. Used to prevent replay attacks.
+     * Solidity type: `uint256`
+     */
+    public var nonce: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Destination address of the Safe transaction.
+         * Solidity type: `address`
+         */to: String, 
+        /**
+         * Ether value of the Safe transaction.
+         * Solidity type: `uint256`
+         */value: String, 
+        /**
+         * Data payload of the Safe transaction.
+         * Solidity type: `bytes`
+         */data: String, 
+        /**
+         * The type of operation to perform on behalf of the Safe Smart Account.
+         * Solidity type: `uint8`
+         */operation: SafeOperation, 
+        /**
+         * The maximum gas that can be used for the Safe transaction.
+         * Solidity type: `uint256`
+         */safeTxGas: String, 
+        /**
+         * Gas costs that are independent of the transaction execution (e.g. base transaction fee, signature check, payment of the refund)
+         * Solidity type: `uint256`
+         */baseGas: String, 
+        /**
+         * Gas price that should be used for the payment calculation.
+         * Solidity type: `uint256`
+         */gasPrice: String, 
+        /**
+         * Token address (or 0 if ETH) that is used for the payment.
+         * Solidity type: `address`
+         */gasToken: String, 
+        /**
+         * Address of receiver of gas payment (or 0 if tx.origin).
+         * Solidity type: `address`
+         */refundReceiver: String, 
+        /**
+         * The sequential nonce of the transaction. Used to prevent replay attacks.
+         * Solidity type: `uint256`
+         */nonce: String) {
+        self.to = to
+        self.value = value
+        self.data = data
+        self.operation = operation
+        self.safeTxGas = safeTxGas
+        self.baseGas = baseGas
+        self.gasPrice = gasPrice
+        self.gasToken = gasToken
+        self.refundReceiver = refundReceiver
+        self.nonce = nonce
+    }
+}
+
+#if compiler(>=6)
+extension SafeTransaction: Sendable {}
+#endif
+
+
+extension SafeTransaction: Equatable, Hashable {
+    public static func ==(lhs: SafeTransaction, rhs: SafeTransaction) -> Bool {
+        if lhs.to != rhs.to {
+            return false
+        }
+        if lhs.value != rhs.value {
+            return false
+        }
+        if lhs.data != rhs.data {
+            return false
+        }
+        if lhs.operation != rhs.operation {
+            return false
+        }
+        if lhs.safeTxGas != rhs.safeTxGas {
+            return false
+        }
+        if lhs.baseGas != rhs.baseGas {
+            return false
+        }
+        if lhs.gasPrice != rhs.gasPrice {
+            return false
+        }
+        if lhs.gasToken != rhs.gasToken {
+            return false
+        }
+        if lhs.refundReceiver != rhs.refundReceiver {
+            return false
+        }
+        if lhs.nonce != rhs.nonce {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(to)
+        hasher.combine(value)
+        hasher.combine(data)
+        hasher.combine(operation)
+        hasher.combine(safeTxGas)
+        hasher.combine(baseGas)
+        hasher.combine(gasPrice)
+        hasher.combine(gasToken)
+        hasher.combine(refundReceiver)
+        hasher.combine(nonce)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSafeTransaction: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SafeTransaction {
+        return
+            try SafeTransaction(
+                to: FfiConverterString.read(from: &buf), 
+                value: FfiConverterString.read(from: &buf), 
+                data: FfiConverterString.read(from: &buf), 
+                operation: FfiConverterTypeSafeOperation.read(from: &buf), 
+                safeTxGas: FfiConverterString.read(from: &buf), 
+                baseGas: FfiConverterString.read(from: &buf), 
+                gasPrice: FfiConverterString.read(from: &buf), 
+                gasToken: FfiConverterString.read(from: &buf), 
+                refundReceiver: FfiConverterString.read(from: &buf), 
+                nonce: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SafeTransaction, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.to, into: &buf)
+        FfiConverterString.write(value.value, into: &buf)
+        FfiConverterString.write(value.data, into: &buf)
+        FfiConverterTypeSafeOperation.write(value.operation, into: &buf)
+        FfiConverterString.write(value.safeTxGas, into: &buf)
+        FfiConverterString.write(value.baseGas, into: &buf)
+        FfiConverterString.write(value.gasPrice, into: &buf)
+        FfiConverterString.write(value.gasToken, into: &buf)
+        FfiConverterString.write(value.refundReceiver, into: &buf)
+        FfiConverterString.write(value.nonce, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSafeTransaction_lift(_ buf: RustBuffer) throws -> SafeTransaction {
+    return try FfiConverterTypeSafeTransaction.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSafeTransaction_lower(_ value: SafeTransaction) -> RustBuffer {
+    return FfiConverterTypeSafeTransaction.lower(value)
+}
 
 
 /**
@@ -2352,6 +2949,87 @@ extension PrimitiveError: Foundation.LocalizedError {
 
 
 
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * The type of operation to perform on behalf of the Safe Smart Account.
+ *
+ * Reference: <https://github.com/safe-global/safe-smart-account/blob/v1.4.1/contracts/libraries/Enum.sol#L9>
+ */
+
+public enum SafeOperation : UInt8 {
+    
+    /**
+     * Performs a standard message call.
+     */
+    case call = 0
+    /**
+     * Performs a `delegatecall`. Executes the target contract’s code in the context of the Safe's storage.
+     */
+    case delegateCall = 1
+}
+
+
+#if compiler(>=6)
+extension SafeOperation: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSafeOperation: FfiConverterRustBuffer {
+    typealias SwiftType = SafeOperation
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SafeOperation {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .call
+        
+        case 2: return .delegateCall
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: SafeOperation, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .call:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .delegateCall:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSafeOperation_lift(_ buf: RustBuffer) throws -> SafeOperation {
+    return try FfiConverterTypeSafeOperation.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSafeOperation_lower(_ value: SafeOperation) -> RustBuffer {
+    return FfiConverterTypeSafeOperation.lower(value)
+}
+
+
+extension SafeOperation: Equatable, Hashable {}
+
+
+
+
+
+
 
 /**
  * Errors that can occur when working with Safe Smart Accounts.
@@ -2379,6 +3057,11 @@ public enum SafeSmartAccountError: Swift.Error {
      * Failed to encode data to a specific format.
      */
     case Encoding(message: String)
+    
+    /**
+     * For security reasons, the contract is restricted from directly signing `TypedData`.
+     */
+    case RestrictedContract(message: String)
     
     /**
      * A provided raw input could not be parsed, is incorrectly formatted, incorrectly encoded or otherwise invalid.
@@ -2427,15 +3110,19 @@ public struct FfiConverterTypeSafeSmartAccountError: FfiConverterRustBuffer {
             message: try FfiConverterString.read(from: &buf)
         )
         
-        case 5: return .InvalidInput(
+        case 5: return .RestrictedContract(
             message: try FfiConverterString.read(from: &buf)
         )
         
-        case 6: return .PrimitiveError(
+        case 6: return .InvalidInput(
             message: try FfiConverterString.read(from: &buf)
         )
         
-        case 7: return .Generic(
+        case 7: return .PrimitiveError(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 8: return .Generic(
             message: try FfiConverterString.read(from: &buf)
         )
         
@@ -2458,12 +3145,14 @@ public struct FfiConverterTypeSafeSmartAccountError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(3))
         case .Encoding(_ /* message is ignored*/):
             writeInt(&buf, Int32(4))
-        case .InvalidInput(_ /* message is ignored*/):
+        case .RestrictedContract(_ /* message is ignored*/):
             writeInt(&buf, Int32(5))
-        case .PrimitiveError(_ /* message is ignored*/):
+        case .InvalidInput(_ /* message is ignored*/):
             writeInt(&buf, Int32(6))
-        case .Generic(_ /* message is ignored*/):
+        case .PrimitiveError(_ /* message is ignored*/):
             writeInt(&buf, Int32(7))
+        case .Generic(_ /* message is ignored*/):
+            writeInt(&buf, Int32(8))
 
         
         }
@@ -2665,13 +3354,25 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_hexencodeddata_to_hex_string() != 53475) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_method_hexencodeddata_to_vec() != 19048) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_method_logger_log() != 30465) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_personal_sign() != 21352) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_sign_4337_op() != 18885) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_sign_4337_op() != 26789) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_safesmartaccount_sign_permit2_transfer() != 46178) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_safesmartaccount_sign_transaction() != 18163) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_safesmartaccount_sign_typed_data() != 43822) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_toolingdemo_demo_authenticate() != 11263) {
