@@ -422,6 +422,22 @@ fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
+    typealias FfiType = UInt64
+    typealias SwiftType = UInt64
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt64 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterBool : FfiConverter {
     typealias FfiType = Int8
     typealias SwiftType = Bool
@@ -1572,6 +1588,19 @@ public func FfiConverterTypeSafeSmartAccount_lower(_ value: SafeSmartAccount) ->
 public protocol ToolingDemoProtocol: AnyObject, Sendable {
     
     /**
+     * Demo: Async operation that showcases automatic tokio runtime configuration
+     *
+     * This async method demonstrates that the bedrock_export macro automatically
+     * adds `async_runtime = "tokio"` to the uniffi::export attribute when any
+     * async functions are detected in the impl block.
+     *
+     * # Errors
+     *
+     * Returns `DemoError::Generic` if the async operation fails.
+     */
+    func demoAsyncOperation(delayMs: UInt64) async throws  -> String
+    
+    /**
      * Demo: Strongly typed errors for known, structured error cases
      *
      * # Errors
@@ -1683,6 +1712,34 @@ public convenience init() {
 
     
 
+    
+    /**
+     * Demo: Async operation that showcases automatic tokio runtime configuration
+     *
+     * This async method demonstrates that the bedrock_export macro automatically
+     * adds `async_runtime = "tokio"` to the uniffi::export attribute when any
+     * async functions are detected in the impl block.
+     *
+     * # Errors
+     *
+     * Returns `DemoError::Generic` if the async operation fails.
+     */
+open func demoAsyncOperation(delayMs: UInt64)async throws  -> String  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_toolingdemo_demo_async_operation(
+                    self.uniffiClonePointer(),
+                    FfiConverterUInt64.lower(delayMs)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
+            completeFunc: ffi_bedrock_rust_future_complete_rust_buffer,
+            freeFunc: ffi_bedrock_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeDemoError_lift
+        )
+}
     
     /**
      * Demo: Strongly typed errors for known, structured error cases
@@ -3236,6 +3293,52 @@ fileprivate struct FfiConverterOptionTypeBedrockConfig: FfiConverterRustBuffer {
         }
     }
 }
+private let UNIFFI_RUST_FUTURE_POLL_READY: Int8 = 0
+private let UNIFFI_RUST_FUTURE_POLL_MAYBE_READY: Int8 = 1
+
+fileprivate let uniffiContinuationHandleMap = UniffiHandleMap<UnsafeContinuation<Int8, Never>>()
+
+fileprivate func uniffiRustCallAsync<F, T>(
+    rustFutureFunc: () -> UInt64,
+    pollFunc: (UInt64, @escaping UniffiRustFutureContinuationCallback, UInt64) -> (),
+    completeFunc: (UInt64, UnsafeMutablePointer<RustCallStatus>) -> F,
+    freeFunc: (UInt64) -> (),
+    liftFunc: (F) throws -> T,
+    errorHandler: ((RustBuffer) throws -> Swift.Error)?
+) async throws -> T {
+    // Make sure to call the ensure init function since future creation doesn't have a
+    // RustCallStatus param, so doesn't use makeRustCall()
+    uniffiEnsureBedrockInitialized()
+    let rustFuture = rustFutureFunc()
+    defer {
+        freeFunc(rustFuture)
+    }
+    var pollResult: Int8;
+    repeat {
+        pollResult = await withUnsafeContinuation {
+            pollFunc(
+                rustFuture,
+                uniffiFutureContinuationCallback,
+                uniffiContinuationHandleMap.insert(obj: $0)
+            )
+        }
+    } while pollResult != UNIFFI_RUST_FUTURE_POLL_READY
+
+    return try liftFunc(makeRustCall(
+        { completeFunc(rustFuture, $0) },
+        errorHandler: errorHandler
+    ))
+}
+
+// Callback handlers for an async calls.  These are invoked by Rust when the future is ready.  They
+// lift the return value or error and resume the suspended function.
+fileprivate func uniffiFutureContinuationCallback(handle: UInt64, pollResult: Int8) {
+    if let continuation = try? uniffiContinuationHandleMap.remove(handle: handle) {
+        continuation.resume(returning: pollResult)
+    } else {
+        print("uniffiFutureContinuationCallback invalid handle")
+    }
+}
 /**
  * Gets a reference to the global Bedrock configuration.
  *
@@ -3373,6 +3476,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_sign_typed_data() != 43822) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_toolingdemo_demo_async_operation() != 30263) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_toolingdemo_demo_authenticate() != 11263) {
