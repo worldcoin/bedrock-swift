@@ -2797,6 +2797,44 @@ public func FfiConverterTypeLogger_lower(_ value: Logger) -> UnsafeMutableRawPoi
  */
 public protocol ManifestManagerProtocol: AnyObject, Sendable {
     
+    /**
+     * Returns files recorded in the global manifest after verifying local is not stale vs remote.
+     *
+     * The caller must supply an HTTP client and signer to perform the gate. This method does not mutate state.
+     *
+     * # Errors
+     * Returns an error if the remote hash does not match local or if network/IO errors occur.
+     */
+    func listFiles(designator: BackupFileDesignator) async throws  -> [String]
+    
+    /**
+     * Removes a specific file entry. Triggers a backup sync.
+     *
+     * # Errors
+     * - Returns an error if the file does not exist in the backup.
+     * - Returns an error if the remote hash does not match local (remote is ahead).
+     * - Returns an error if serialization fails.
+     */
+    func removeFile(filePath: String, rootSecret: String, backupKeypairPublicKey: String) async throws 
+    
+    /**
+     * Replaces all the file entries for a given designator by removing all existing entries for a given designator
+     * and adding a new file.
+     *
+     * # Errors
+     * Returns an error if the remote hash does not match local or downstream operations fail.
+     */
+    func replaceAllFilesForDesignator(designator: BackupFileDesignator, newFilePath: String, rootSecret: String, backupKeypairPublicKey: String) async throws 
+    
+    /**
+     * Adds a file entry for a given designator. Will trigger a backup sync.
+     *
+     * # Errors
+     * - Returns an error if remote hash does not match local (remote is ahead).
+     * - Returns an error if serialization fails.
+     */
+    func storeFile(designator: BackupFileDesignator, filePath: String, rootSecret: String, backupKeypairPublicKey: String) async throws 
+    
 }
 /**
  * Manager responsible for reading and writing backup manifests and coordinating sync.
@@ -2842,7 +2880,17 @@ open class ManifestManager: ManifestManagerProtocol, @unchecked Sendable {
     public func uniffiClonePointer() -> UnsafeMutableRawPointer {
         return try! rustCall { uniffi_bedrock_fn_clone_manifestmanager(self.pointer, $0) }
     }
-    // No primary constructor declared for this class.
+    /**
+     * Constructs a new `ManifestManager` instance with a file system middleware scoped to backups.
+     */
+public convenience init() {
+    let pointer =
+        try! rustCall() {
+    uniffi_bedrock_fn_constructor_manifestmanager_new($0
+    )
+}
+    self.init(unsafeFromRawPointer: pointer)
+}
 
     deinit {
         guard let pointer = pointer else {
@@ -2854,6 +2902,104 @@ open class ManifestManager: ManifestManagerProtocol, @unchecked Sendable {
 
     
 
+    
+    /**
+     * Returns files recorded in the global manifest after verifying local is not stale vs remote.
+     *
+     * The caller must supply an HTTP client and signer to perform the gate. This method does not mutate state.
+     *
+     * # Errors
+     * Returns an error if the remote hash does not match local or if network/IO errors occur.
+     */
+open func listFiles(designator: BackupFileDesignator)async throws  -> [String]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_manifestmanager_list_files(
+                    self.uniffiClonePointer(),
+                    FfiConverterTypeBackupFileDesignator_lower(designator)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
+            completeFunc: ffi_bedrock_rust_future_complete_rust_buffer,
+            freeFunc: ffi_bedrock_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceString.lift,
+            errorHandler: FfiConverterTypeBackupError_lift
+        )
+}
+    
+    /**
+     * Removes a specific file entry. Triggers a backup sync.
+     *
+     * # Errors
+     * - Returns an error if the file does not exist in the backup.
+     * - Returns an error if the remote hash does not match local (remote is ahead).
+     * - Returns an error if serialization fails.
+     */
+open func removeFile(filePath: String, rootSecret: String, backupKeypairPublicKey: String)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_manifestmanager_remove_file(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(filePath),FfiConverterString.lower(rootSecret),FfiConverterString.lower(backupKeypairPublicKey)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_void,
+            completeFunc: ffi_bedrock_rust_future_complete_void,
+            freeFunc: ffi_bedrock_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeBackupError_lift
+        )
+}
+    
+    /**
+     * Replaces all the file entries for a given designator by removing all existing entries for a given designator
+     * and adding a new file.
+     *
+     * # Errors
+     * Returns an error if the remote hash does not match local or downstream operations fail.
+     */
+open func replaceAllFilesForDesignator(designator: BackupFileDesignator, newFilePath: String, rootSecret: String, backupKeypairPublicKey: String)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_manifestmanager_replace_all_files_for_designator(
+                    self.uniffiClonePointer(),
+                    FfiConverterTypeBackupFileDesignator_lower(designator),FfiConverterString.lower(newFilePath),FfiConverterString.lower(rootSecret),FfiConverterString.lower(backupKeypairPublicKey)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_void,
+            completeFunc: ffi_bedrock_rust_future_complete_void,
+            freeFunc: ffi_bedrock_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeBackupError_lift
+        )
+}
+    
+    /**
+     * Adds a file entry for a given designator. Will trigger a backup sync.
+     *
+     * # Errors
+     * - Returns an error if remote hash does not match local (remote is ahead).
+     * - Returns an error if serialization fails.
+     */
+open func storeFile(designator: BackupFileDesignator, filePath: String, rootSecret: String, backupKeypairPublicKey: String)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_manifestmanager_store_file(
+                    self.uniffiClonePointer(),
+                    FfiConverterTypeBackupFileDesignator_lower(designator),FfiConverterString.lower(filePath),FfiConverterString.lower(rootSecret),FfiConverterString.lower(backupKeypairPublicKey)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_void,
+            completeFunc: ffi_bedrock_rust_future_complete_void,
+            freeFunc: ffi_bedrock_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeBackupError_lift
+        )
+}
     
 
 }
@@ -7998,6 +8144,18 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_logger_log() != 30465) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_method_manifestmanager_list_files() != 62425) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_manifestmanager_remove_file() != 20375) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_manifestmanager_replace_all_files_for_designator() != 31175) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_manifestmanager_store_file() != 35335) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_method_rootkey_is_equal_to() != 2010) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8053,6 +8211,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_hexencodeddata_new() != 40879) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_constructor_manifestmanager_new() != 11752) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_rootkey_from_json() != 2594) {
