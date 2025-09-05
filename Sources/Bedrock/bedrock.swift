@@ -1619,18 +1619,21 @@ public protocol FileSystem: AnyObject, Sendable {
      * Read file contents
      *
      * # Errors
-     * - `FileSystemError::ReadFileError` if the file cannot be read
+     * - `FileSystemError::IoFailure` if the file cannot be read
      * - `FileSystemError::FileDoesNotExist` if the file doesn't exist
      */
     func readFile(filePath: String) throws  -> Data
     
     /**
-     * List files in a directory
+     * List files in a specific directory. No recursion and no subdirectories are returned.
+     *
+     * # Notes
+     * Files are returned without the directory path. Only the file name is returned.
      *
      * # Errors
-     * - `FileSystemError::ListFilesError` if the directory cannot be listed
+     * - `FileSystemError::IoFailure` if the directory cannot be listed
      */
-    func listFiles(folderPath: String) throws  -> [String]
+    func listFilesAtDirectory(folderPath: String) throws  -> [String]
     
     /**
      * Read a specific byte range from a file
@@ -1639,7 +1642,7 @@ public protocol FileSystem: AnyObject, Sendable {
      * when `offset` is at or beyond the end of the file.
      *
      * # Errors
-     * - `FileSystemError::ReadFileError` if the file cannot be read
+     * - `FileSystemError::IoFailure` if the file cannot be read
      * - `FileSystemError::FileDoesNotExist` if the file doesn't exist
      */
     func readFileRange(filePath: String, offset: UInt64, maxLength: UInt64) throws  -> Data
@@ -1648,7 +1651,7 @@ public protocol FileSystem: AnyObject, Sendable {
      * Write file contents
      *
      * # Errors
-     * - `FileSystemError::WriteFileError` if the file cannot be written, with details about the failure
+     * - `FileSystemError::IoFailure` if the file cannot be written, with details about the failure
      */
     func writeFile(filePath: String, fileBuffer: Data) throws 
     
@@ -1657,7 +1660,7 @@ public protocol FileSystem: AnyObject, Sendable {
      *
      * # Errors
      * - `FileSystemError::FileDoesNotExist` if the file does not exist
-     * - `FileSystemError::DeleteFileError` if the file cannot be deleted
+     * - `FileSystemError::IoFailure` if the file cannot be deleted
      */
     func deleteFile(filePath: String) throws 
     
@@ -1735,7 +1738,7 @@ open func fileExists(filePath: String)throws  -> Bool  {
      * Read file contents
      *
      * # Errors
-     * - `FileSystemError::ReadFileError` if the file cannot be read
+     * - `FileSystemError::IoFailure` if the file cannot be read
      * - `FileSystemError::FileDoesNotExist` if the file doesn't exist
      */
 open func readFile(filePath: String)throws  -> Data  {
@@ -1747,14 +1750,17 @@ open func readFile(filePath: String)throws  -> Data  {
 }
     
     /**
-     * List files in a directory
+     * List files in a specific directory. No recursion and no subdirectories are returned.
+     *
+     * # Notes
+     * Files are returned without the directory path. Only the file name is returned.
      *
      * # Errors
-     * - `FileSystemError::ListFilesError` if the directory cannot be listed
+     * - `FileSystemError::IoFailure` if the directory cannot be listed
      */
-open func listFiles(folderPath: String)throws  -> [String]  {
+open func listFilesAtDirectory(folderPath: String)throws  -> [String]  {
     return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
-    uniffi_bedrock_fn_method_filesystem_list_files(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_filesystem_list_files_at_directory(self.uniffiClonePointer(),
         FfiConverterString.lower(folderPath),$0
     )
 })
@@ -1767,7 +1773,7 @@ open func listFiles(folderPath: String)throws  -> [String]  {
      * when `offset` is at or beyond the end of the file.
      *
      * # Errors
-     * - `FileSystemError::ReadFileError` if the file cannot be read
+     * - `FileSystemError::IoFailure` if the file cannot be read
      * - `FileSystemError::FileDoesNotExist` if the file doesn't exist
      */
 open func readFileRange(filePath: String, offset: UInt64, maxLength: UInt64)throws  -> Data  {
@@ -1784,7 +1790,7 @@ open func readFileRange(filePath: String, offset: UInt64, maxLength: UInt64)thro
      * Write file contents
      *
      * # Errors
-     * - `FileSystemError::WriteFileError` if the file cannot be written, with details about the failure
+     * - `FileSystemError::IoFailure` if the file cannot be written, with details about the failure
      */
 open func writeFile(filePath: String, fileBuffer: Data)throws   {try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
     uniffi_bedrock_fn_method_filesystem_write_file(self.uniffiClonePointer(),
@@ -1799,7 +1805,7 @@ open func writeFile(filePath: String, fileBuffer: Data)throws   {try rustCallWit
      *
      * # Errors
      * - `FileSystemError::FileDoesNotExist` if the file does not exist
-     * - `FileSystemError::DeleteFileError` if the file cannot be deleted
+     * - `FileSystemError::IoFailure` if the file cannot be deleted
      */
 open func deleteFile(filePath: String)throws   {try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
     uniffi_bedrock_fn_method_filesystem_delete_file(self.uniffiClonePointer(),
@@ -1871,7 +1877,7 @@ fileprivate struct UniffiCallbackInterfaceFileSystem {
                 lowerError: FfiConverterTypeFileSystemError_lower
             )
         },
-        listFiles: { (
+        listFilesAtDirectory: { (
             uniffiHandle: UInt64,
             folderPath: RustBuffer,
             uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
@@ -1882,7 +1888,7 @@ fileprivate struct UniffiCallbackInterfaceFileSystem {
                 guard let uniffiObj = try? FfiConverterTypeFileSystem.handleMap.get(handle: uniffiHandle) else {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
-                return try uniffiObj.listFiles(
+                return try uniffiObj.listFilesAtDirectory(
                      folderPath: try FfiConverterString.lift(folderPath)
                 )
             }
@@ -2076,7 +2082,7 @@ public protocol FileSystemTesterProtocol: AnyObject, Sendable {
      * # Errors
      * - `FileSystemError` if filesystem operations fail
      */
-    func testListFiles() throws  -> [String]
+    func testListFilesAtDirectory() throws  -> [String]
     
     /**
      * Tests reading a file using the injected filesystem middleware
@@ -2193,9 +2199,9 @@ open func testFileExists(filename: String)throws  -> Bool  {
      * # Errors
      * - `FileSystemError` if filesystem operations fail
      */
-open func testListFiles()throws  -> [String]  {
+open func testListFilesAtDirectory()throws  -> [String]  {
     return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
-    uniffi_bedrock_fn_method_filesystemtester_test_list_files(self.uniffiClonePointer(),$0
+    uniffi_bedrock_fn_method_filesystemtester_test_list_files_at_directory(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -5982,26 +5988,13 @@ public enum FileSystemError: Swift.Error {
     
     
     /**
-     * Failed to read the file
-     */
-    case ReadFileError
-    /**
      * Tried to read a file that doesn't exist
      */
     case FileDoesNotExist
     /**
-     * Failed to write file
+     * Something went wrong with the filesystem operation
      */
-    case WriteFileError(String
-    )
-    /**
-     * Failed to delete file
-     */
-    case DeleteFileError
-    /**
-     * Failed to list files
-     */
-    case ListFilesError(String
+    case IoFailure(String
     )
     /**
      * Filesystem not initialized
@@ -6028,17 +6021,12 @@ public struct FfiConverterTypeFileSystemError: FfiConverterRustBuffer {
         
 
         
-        case 1: return .ReadFileError
-        case 2: return .FileDoesNotExist
-        case 3: return .WriteFileError(
+        case 1: return .FileDoesNotExist
+        case 2: return .IoFailure(
             try FfiConverterString.read(from: &buf)
             )
-        case 4: return .DeleteFileError
-        case 5: return .ListFilesError(
-            try FfiConverterString.read(from: &buf)
-            )
-        case 6: return .NotInitialized
-        case 7: return .UnexpectedUniFfiCallbackError(
+        case 3: return .NotInitialized
+        case 4: return .UnexpectedUniFfiCallbackError(
             try FfiConverterString.read(from: &buf)
             )
 
@@ -6053,34 +6041,21 @@ public struct FfiConverterTypeFileSystemError: FfiConverterRustBuffer {
 
         
         
-        case .ReadFileError:
+        case .FileDoesNotExist:
             writeInt(&buf, Int32(1))
         
         
-        case .FileDoesNotExist:
+        case let .IoFailure(v1):
             writeInt(&buf, Int32(2))
-        
-        
-        case let .WriteFileError(v1):
-            writeInt(&buf, Int32(3))
-            FfiConverterString.write(v1, into: &buf)
-            
-        
-        case .DeleteFileError:
-            writeInt(&buf, Int32(4))
-        
-        
-        case let .ListFilesError(v1):
-            writeInt(&buf, Int32(5))
             FfiConverterString.write(v1, into: &buf)
             
         
         case .NotInitialized:
-            writeInt(&buf, Int32(6))
+            writeInt(&buf, Int32(3))
         
         
         case let .UnexpectedUniFfiCallbackError(v1):
-            writeInt(&buf, Int32(7))
+            writeInt(&buf, Int32(4))
             FfiConverterString.write(v1, into: &buf)
             
         }
@@ -8105,19 +8080,19 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_filesystem_file_exists() != 29331) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_filesystem_read_file() != 46205) {
+    if (uniffi_bedrock_checksum_method_filesystem_read_file() != 33257) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_filesystem_list_files() != 46028) {
+    if (uniffi_bedrock_checksum_method_filesystem_list_files_at_directory() != 43568) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_filesystem_read_file_range() != 14272) {
+    if (uniffi_bedrock_checksum_method_filesystem_read_file_range() != 28178) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_filesystem_write_file() != 63173) {
+    if (uniffi_bedrock_checksum_method_filesystem_write_file() != 21027) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_filesystem_delete_file() != 9317) {
+    if (uniffi_bedrock_checksum_method_filesystem_delete_file() != 41764) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_filesystemtester_test_delete_file() != 61617) {
@@ -8126,7 +8101,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_filesystemtester_test_file_exists() != 11185) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_filesystemtester_test_list_files() != 65444) {
+    if (uniffi_bedrock_checksum_method_filesystemtester_test_list_files_at_directory() != 55640) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_filesystemtester_test_read_file() != 34530) {
