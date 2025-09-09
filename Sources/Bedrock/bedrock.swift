@@ -1603,6 +1603,193 @@ public func FfiConverterTypeBedrockConfig_lower(_ value: BedrockConfig) -> Unsaf
 
 
 /**
+ * Verifies AWS Nitro Enclave attestation documents
+ *
+ * This class performs comprehensive verification of attestation documents including:
+ * - COSE Sign1 signature verification
+ * - Certificate chain validation against AWS Nitro root certificates
+ * - PCR (Platform Configuration Register) value validation
+ * - Attestation document freshness checks
+ * - Public key extraction
+ */
+public protocol EnclaveAttestationVerifierProtocol: AnyObject, Sendable {
+    
+    /**
+     * Verifies a base64-encoded attestation document
+     *
+     * This is a convenience method that handles base64 decoding and then verifies the document
+     *
+     * # Arguments
+     * * `attestation_doc_base64` - The base64-encoded attestation document
+     *
+     * # Returns
+     * A verified attestation containing the enclave's public key and PCR values
+     *
+     * # Errors
+     * Returns an error if the base64 decoding fails or the attestation document verification fails
+     */
+    func verifyAttestationDocumentBase64(attestationDocBase64: String) throws  -> VerifiedAttestation
+    
+}
+/**
+ * Verifies AWS Nitro Enclave attestation documents
+ *
+ * This class performs comprehensive verification of attestation documents including:
+ * - COSE Sign1 signature verification
+ * - Certificate chain validation against AWS Nitro root certificates
+ * - PCR (Platform Configuration Register) value validation
+ * - Attestation document freshness checks
+ * - Public key extraction
+ */
+open class EnclaveAttestationVerifier: EnclaveAttestationVerifierProtocol, @unchecked Sendable {
+    fileprivate let pointer: UnsafeMutableRawPointer!
+
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoPointer {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
+        self.pointer = pointer
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noPointer: NoPointer) {
+        self.pointer = nil
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
+        return try! rustCall { uniffi_bedrock_fn_clone_enclaveattestationverifier(self.pointer, $0) }
+    }
+    /**
+     * Creates a new `EnclaveAttestationVerifier`
+     *
+     * # Arguments
+     * * `environment` - The environment to use for this verifier
+     *
+     * # Panics
+     * Panics if the Bedrock config is not initialized.
+     */
+public convenience init() {
+    let pointer =
+        try! rustCall() {
+    uniffi_bedrock_fn_constructor_enclaveattestationverifier_new($0
+    )
+}
+    self.init(unsafeFromRawPointer: pointer)
+}
+
+    deinit {
+        guard let pointer = pointer else {
+            return
+        }
+
+        try! rustCall { uniffi_bedrock_fn_free_enclaveattestationverifier(pointer, $0) }
+    }
+
+    
+
+    
+    /**
+     * Verifies a base64-encoded attestation document
+     *
+     * This is a convenience method that handles base64 decoding and then verifies the document
+     *
+     * # Arguments
+     * * `attestation_doc_base64` - The base64-encoded attestation document
+     *
+     * # Returns
+     * A verified attestation containing the enclave's public key and PCR values
+     *
+     * # Errors
+     * Returns an error if the base64 decoding fails or the attestation document verification fails
+     */
+open func verifyAttestationDocumentBase64(attestationDocBase64: String)throws  -> VerifiedAttestation  {
+    return try  FfiConverterTypeVerifiedAttestation_lift(try rustCallWithError(FfiConverterTypeEnclaveAttestationError_lift) {
+    uniffi_bedrock_fn_method_enclaveattestationverifier_verify_attestation_document_base64(self.uniffiClonePointer(),
+        FfiConverterString.lower(attestationDocBase64),$0
+    )
+})
+}
+    
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeEnclaveAttestationVerifier: FfiConverter {
+
+    typealias FfiType = UnsafeMutableRawPointer
+    typealias SwiftType = EnclaveAttestationVerifier
+
+    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> EnclaveAttestationVerifier {
+        return EnclaveAttestationVerifier(unsafeFromRawPointer: pointer)
+    }
+
+    public static func lower(_ value: EnclaveAttestationVerifier) -> UnsafeMutableRawPointer {
+        return value.uniffiClonePointer()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> EnclaveAttestationVerifier {
+        let v: UInt64 = try readInt(&buf)
+        // The Rust code won't compile if a pointer won't fit in a UInt64.
+        // We have to go via `UInt` because that's the thing that's the size of a pointer.
+        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
+        if (ptr == nil) {
+            throw UniffiInternalError.unexpectedNullPointer
+        }
+        return try lift(ptr!)
+    }
+
+    public static func write(_ value: EnclaveAttestationVerifier, into buf: inout [UInt8]) {
+        // This fiddling is because `Int` is the thing that's the same size as a pointer.
+        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
+        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeEnclaveAttestationVerifier_lift(_ pointer: UnsafeMutableRawPointer) throws -> EnclaveAttestationVerifier {
+    return try FfiConverterTypeEnclaveAttestationVerifier.lift(pointer)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeEnclaveAttestationVerifier_lower(_ value: EnclaveAttestationVerifier) -> UnsafeMutableRawPointer {
+    return FfiConverterTypeEnclaveAttestationVerifier.lower(value)
+}
+
+
+
+
+
+
+/**
  * Trait representing a filesystem that can be implemented by the native side
  */
 public protocol FileSystem: AnyObject, Sendable {
@@ -5276,6 +5463,105 @@ public func FfiConverterTypeUnparsedUserOperation_lower(_ value: UnparsedUserOpe
 
 
 /**
+ * Verified attestation data from the enclave.
+ */
+public struct VerifiedAttestation {
+    /**
+     * The hex encoded public key of the enclave
+     */
+    public var enclavePublicKey: String
+    /**
+     * The timestamp of the attestation
+     */
+    public var timestamp: UInt64
+    /**
+     * The module ID of the enclave
+     */
+    public var moduleId: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The hex encoded public key of the enclave
+         */enclavePublicKey: String, 
+        /**
+         * The timestamp of the attestation
+         */timestamp: UInt64, 
+        /**
+         * The module ID of the enclave
+         */moduleId: String) {
+        self.enclavePublicKey = enclavePublicKey
+        self.timestamp = timestamp
+        self.moduleId = moduleId
+    }
+}
+
+#if compiler(>=6)
+extension VerifiedAttestation: Sendable {}
+#endif
+
+
+extension VerifiedAttestation: Equatable, Hashable {
+    public static func ==(lhs: VerifiedAttestation, rhs: VerifiedAttestation) -> Bool {
+        if lhs.enclavePublicKey != rhs.enclavePublicKey {
+            return false
+        }
+        if lhs.timestamp != rhs.timestamp {
+            return false
+        }
+        if lhs.moduleId != rhs.moduleId {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(enclavePublicKey)
+        hasher.combine(timestamp)
+        hasher.combine(moduleId)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeVerifiedAttestation: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> VerifiedAttestation {
+        return
+            try VerifiedAttestation(
+                enclavePublicKey: FfiConverterString.read(from: &buf), 
+                timestamp: FfiConverterUInt64.read(from: &buf), 
+                moduleId: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: VerifiedAttestation, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.enclavePublicKey, into: &buf)
+        FfiConverterUInt64.write(value.timestamp, into: &buf)
+        FfiConverterString.write(value.moduleId, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVerifiedAttestation_lift(_ buf: RustBuffer) throws -> VerifiedAttestation {
+    return try FfiConverterTypeVerifiedAttestation.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVerifiedAttestation_lower(_ value: VerifiedAttestation) -> RustBuffer {
+    return FfiConverterTypeVerifiedAttestation.lower(value)
+}
+
+
+/**
  * Errors that can occur when working with backups and manifests.
  */
 public enum BackupError: Swift.Error {
@@ -5882,6 +6168,176 @@ extension DemoError: Equatable, Hashable {}
 
 
 extension DemoError: Foundation.LocalizedError {
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+}
+
+
+
+
+
+/**
+ * Represents errors that can occur during enclave attestation verification
+ */
+public enum EnclaveAttestationError: Swift.Error {
+
+    
+    
+    /**
+     * Failed to parse attestation document
+     */
+    case AttestationDocumentParseError(message: String)
+    
+    /**
+     * Certificate chain validation failed
+     */
+    case AttestationChainInvalid(message: String)
+    
+    /**
+     * Signature verification failed
+     */
+    case AttestationSignatureInvalid(message: String)
+    
+    /**
+     * PCR value did not match the expected value
+     */
+    case CodeUntrusted(message: String)
+    
+    /**
+     * Attestation timestamp is too old
+     */
+    case AttestationStale(message: String)
+    
+    /**
+     * Invalid timestamp
+     */
+    case AttestationInvalidTimestamp(message: String)
+    
+    /**
+     * Invalid enclave public key
+     */
+    case InvalidEnclavePublicKey(message: String)
+    
+    /**
+     * A generic error that can wrap any anyhow error.
+     */
+    case Generic(message: String)
+    
+    /**
+     * Filesystem operation error.
+     */
+    case FileSystem(message: String)
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeEnclaveAttestationError: FfiConverterRustBuffer {
+    typealias SwiftType = EnclaveAttestationError
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> EnclaveAttestationError {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        
+
+        
+        case 1: return .AttestationDocumentParseError(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 2: return .AttestationChainInvalid(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 3: return .AttestationSignatureInvalid(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 4: return .CodeUntrusted(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 5: return .AttestationStale(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 6: return .AttestationInvalidTimestamp(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 7: return .InvalidEnclavePublicKey(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 8: return .Generic(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 9: return .FileSystem(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: EnclaveAttestationError, into buf: inout [UInt8]) {
+        switch value {
+
+        
+
+        
+        case .AttestationDocumentParseError(_ /* message is ignored*/):
+            writeInt(&buf, Int32(1))
+        case .AttestationChainInvalid(_ /* message is ignored*/):
+            writeInt(&buf, Int32(2))
+        case .AttestationSignatureInvalid(_ /* message is ignored*/):
+            writeInt(&buf, Int32(3))
+        case .CodeUntrusted(_ /* message is ignored*/):
+            writeInt(&buf, Int32(4))
+        case .AttestationStale(_ /* message is ignored*/):
+            writeInt(&buf, Int32(5))
+        case .AttestationInvalidTimestamp(_ /* message is ignored*/):
+            writeInt(&buf, Int32(6))
+        case .InvalidEnclavePublicKey(_ /* message is ignored*/):
+            writeInt(&buf, Int32(7))
+        case .Generic(_ /* message is ignored*/):
+            writeInt(&buf, Int32(8))
+        case .FileSystem(_ /* message is ignored*/):
+            writeInt(&buf, Int32(9))
+
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeEnclaveAttestationError_lift(_ buf: RustBuffer) throws -> EnclaveAttestationError {
+    return try FfiConverterTypeEnclaveAttestationError.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeEnclaveAttestationError_lower(_ value: EnclaveAttestationError) -> RustBuffer {
+    return FfiConverterTypeEnclaveAttestationError.lower(value)
+}
+
+
+extension EnclaveAttestationError: Equatable, Hashable {}
+
+
+
+
+extension EnclaveAttestationError: Foundation.LocalizedError {
     public var errorDescription: String? {
         String(reflecting: self)
     }
@@ -8077,6 +8533,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_bedrockconfig_environment() != 53973) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_method_enclaveattestationverifier_verify_attestation_document_base64() != 59047) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_method_filesystem_file_exists() != 29331) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8180,6 +8639,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_bedrockconfig_new() != 53259) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_constructor_enclaveattestationverifier_new() != 12205) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_filesystemtester_new() != 12987) {
