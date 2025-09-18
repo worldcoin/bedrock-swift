@@ -8280,6 +8280,25 @@ public func uniffiForeignFutureHandleCountBedrock() -> Int {
     UNIFFI_FOREIGN_FUTURE_HANDLE_MAP.count
 }
 /**
+ * Allows to compute the predicted wallet address from the EOA address **only for newly deployed Safe Smart Accounts**.
+ *
+ * This function uses an algorithm that's specific for v1.4.1 Safe contracts. This function
+ * should **NOT be used** for existing World App wallets as they may have been deployed with other
+ * parameters. It's safer to rely on the on-chain/backend records for this.
+ *
+ * Backend reference: <https://github.com/worldcoin/app-backend-main/blob/58c3debef35fb9b283a87c75fab023d6281a019f/src/users-wallets/users-wallets.service.ts#L423>
+ *
+ * # Errors
+ * * `SafeSmartAccountError::InvalidInput` - if the EOA address is invalid.
+ */
+public func computeWalletAddressForFreshAccount(eoaAddress: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeSafeSmartAccountError_lift) {
+    uniffi_bedrock_fn_func_compute_wallet_address_for_fresh_account(
+        FfiConverterString.lower(eoaAddress),$0
+    )
+})
+}
+/**
  * Gets a reference to the global Bedrock configuration.
  *
  * # Returns
@@ -8481,6 +8500,9 @@ private let initializationResult: InitializationResult = {
     let scaffolding_contract_version = ffi_bedrock_uniffi_contract_version()
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
+    }
+    if (uniffi_bedrock_checksum_func_compute_wallet_address_for_fresh_account() != 49783) {
+        return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_func_get_config() != 37061) {
         return InitializationResult.apiChecksumMismatch
