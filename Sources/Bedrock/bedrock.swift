@@ -905,6 +905,19 @@ public protocol BackupManagerProtocol: AnyObject, Sendable {
      */
     func decryptAndUnpackSealedBackup(sealedBackupData: Data, encryptedBackupKeypair: String, factorSecret: String, factorType: FactorType, currentManifestHash: String) throws  -> DecryptedBackup
     
+    /**
+     * Should be called after the backup is disabled/deleted.
+     *
+     * It processes local state after the backup is disabled/deleted.
+     *
+     * Currently it:
+     * 1. Deletes the local manifest file.
+     *
+     * # Errors
+     * - Returns an error if the post-processing fails.
+     */
+    func postDeleteBackup() throws 
+    
 }
 /**
  * Tools for storing, retrieving, encrypting and decrypting backup data.
@@ -1090,6 +1103,23 @@ open func decryptAndUnpackSealedBackup(sealedBackupData: Data, encryptedBackupKe
         FfiConverterString.lower(currentManifestHash),$0
     )
 })
+}
+    
+    /**
+     * Should be called after the backup is disabled/deleted.
+     *
+     * It processes local state after the backup is disabled/deleted.
+     *
+     * Currently it:
+     * 1. Deletes the local manifest file.
+     *
+     * # Errors
+     * - Returns an error if the post-processing fails.
+     */
+open func postDeleteBackup()throws   {try rustCallWithError(FfiConverterTypeBackupError_lift) {
+    uniffi_bedrock_fn_method_backupmanager_post_delete_backup(self.uniffiClonePointer(),$0
+    )
+}
 }
     
 
@@ -3454,7 +3484,7 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
      * # Examples
      * ```rust
      * use bedrock::smart_account::{SafeSmartAccount};
-     * use bedrock::transaction::foreign::UnparsedUserOperation;
+     * use bedrock::transactions::foreign::UnparsedUserOperation;
      * use bedrock::primitives::Network;
      *
      * let safe = SafeSmartAccount::new(
@@ -3550,7 +3580,7 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
      *
      * ```rust,no_run
      * use bedrock::smart_account::SafeSmartAccount;
-     * use bedrock::transaction::TransactionError;
+     * use bedrock::transactions::TransactionError;
      * use bedrock::primitives::Network;
      *
      * # async fn example() -> Result<(), TransactionError> {
@@ -3694,7 +3724,7 @@ open func personalSign(chainId: UInt32, message: String)throws  -> HexEncodedDat
      * # Examples
      * ```rust
      * use bedrock::smart_account::{SafeSmartAccount};
-     * use bedrock::transaction::foreign::UnparsedUserOperation;
+     * use bedrock::transactions::foreign::UnparsedUserOperation;
      * use bedrock::primitives::Network;
      *
      * let safe = SafeSmartAccount::new(
@@ -3818,7 +3848,7 @@ open func signTypedData(chainId: UInt32, stringifiedTypedData: String)throws  ->
      *
      * ```rust,no_run
      * use bedrock::smart_account::SafeSmartAccount;
-     * use bedrock::transaction::TransactionError;
+     * use bedrock::transactions::TransactionError;
      * use bedrock::primitives::Network;
      *
      * # async fn example() -> Result<(), TransactionError> {
@@ -8546,6 +8576,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_backupmanager_decrypt_and_unpack_sealed_backup() != 30187) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_method_backupmanager_post_delete_backup() != 63845) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_method_backupserviceapi_sync() != 58245) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8621,7 +8654,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_safesmartaccount_personal_sign() != 21352) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_sign_4337_op() != 35565) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_sign_4337_op() != 4646) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_sign_permit2_transfer() != 839) {
@@ -8633,7 +8666,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_safesmartaccount_sign_typed_data() != 43822) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_transfer() != 25519) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_transfer() != 61864) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_toolingdemo_demo_async_operation() != 60685) {
