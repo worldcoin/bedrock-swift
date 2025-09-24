@@ -1477,6 +1477,193 @@ public func FfiConverterTypeBackupServiceApi_lower(_ value: BackupServiceApi) ->
 
 
 /**
+ * A primitive for interacting with Ethereum addresses.
+ *
+ * Wraps the `Address` type from the `alloy` crate for foreign exports.
+ */
+public protocol BedrockAddressProtocol: AnyObject, Sendable {
+    
+    /**
+     * Returns the address as an ABI encoded byte array.
+     */
+    func asAbiEncode()  -> Data
+    
+    /**
+     * Returns the address as an ABI **packed** encoded byte array.
+     */
+    func asAbiEncodePacked()  -> Data
+    
+    /**
+     * Returns the address as a checksummed string.
+     *
+     * Reference: <https://eips.ethereum.org/EIPS/eip-55>
+     */
+    func asChecksummedStr(chainId: UInt64?)  -> String
+    
+}
+/**
+ * A primitive for interacting with Ethereum addresses.
+ *
+ * Wraps the `Address` type from the `alloy` crate for foreign exports.
+ */
+open class BedrockAddress: BedrockAddressProtocol, @unchecked Sendable {
+    fileprivate let pointer: UnsafeMutableRawPointer!
+
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoPointer {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
+        self.pointer = pointer
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noPointer: NoPointer) {
+        self.pointer = nil
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
+        return try! rustCall { uniffi_bedrock_fn_clone_bedrockaddress(self.pointer, $0) }
+    }
+    /**
+     * Initializes a new `BedrockAddress` from a String.
+     *
+     * # Errors
+     * - `PrimitiveError::InvalidInput` if the provided string is not a valid Ethereum address.
+     */
+public convenience init(address: String)throws  {
+    let pointer =
+        try rustCallWithError(FfiConverterTypePrimitiveError_lift) {
+    uniffi_bedrock_fn_constructor_bedrockaddress_new(
+        FfiConverterString.lower(address),$0
+    )
+}
+    self.init(unsafeFromRawPointer: pointer)
+}
+
+    deinit {
+        guard let pointer = pointer else {
+            return
+        }
+
+        try! rustCall { uniffi_bedrock_fn_free_bedrockaddress(pointer, $0) }
+    }
+
+    
+
+    
+    /**
+     * Returns the address as an ABI encoded byte array.
+     */
+open func asAbiEncode() -> Data  {
+    return try!  FfiConverterData.lift(try! rustCall() {
+    uniffi_bedrock_fn_method_bedrockaddress_as_abi_encode(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+    /**
+     * Returns the address as an ABI **packed** encoded byte array.
+     */
+open func asAbiEncodePacked() -> Data  {
+    return try!  FfiConverterData.lift(try! rustCall() {
+    uniffi_bedrock_fn_method_bedrockaddress_as_abi_encode_packed(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+    /**
+     * Returns the address as a checksummed string.
+     *
+     * Reference: <https://eips.ethereum.org/EIPS/eip-55>
+     */
+open func asChecksummedStr(chainId: UInt64?) -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_bedrock_fn_method_bedrockaddress_as_checksummed_str(self.uniffiClonePointer(),
+        FfiConverterOptionUInt64.lower(chainId),$0
+    )
+})
+}
+    
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBedrockAddress: FfiConverter {
+
+    typealias FfiType = UnsafeMutableRawPointer
+    typealias SwiftType = BedrockAddress
+
+    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> BedrockAddress {
+        return BedrockAddress(unsafeFromRawPointer: pointer)
+    }
+
+    public static func lower(_ value: BedrockAddress) -> UnsafeMutableRawPointer {
+        return value.uniffiClonePointer()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BedrockAddress {
+        let v: UInt64 = try readInt(&buf)
+        // The Rust code won't compile if a pointer won't fit in a UInt64.
+        // We have to go via `UInt` because that's the thing that's the size of a pointer.
+        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
+        if (ptr == nil) {
+            throw UniffiInternalError.unexpectedNullPointer
+        }
+        return try lift(ptr!)
+    }
+
+    public static func write(_ value: BedrockAddress, into buf: inout [UInt8]) {
+        // This fiddling is because `Int` is the thing that's the same size as a pointer.
+        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
+        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBedrockAddress_lift(_ pointer: UnsafeMutableRawPointer) throws -> BedrockAddress {
+    return try FfiConverterTypeBedrockAddress.lift(pointer)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBedrockAddress_lower(_ value: BedrockAddress) -> UnsafeMutableRawPointer {
+    return FfiConverterTypeBedrockAddress.lower(value)
+}
+
+
+
+
+
+
+/**
  * Global configuration for Bedrock
  */
 public protocol BedrockConfigProtocol: AnyObject, Sendable {
@@ -1645,6 +1832,26 @@ public func FfiConverterTypeBedrockConfig_lower(_ value: BedrockConfig) -> Unsaf
 public protocol EnclaveAttestationVerifierProtocol: AnyObject, Sendable {
     
     /**
+     * Verifies a base64-encoded attestation document and encrypts the given plaintext
+     *
+     * This is a convenience method that handles base64 decoding, verifying the attestation document,
+     * and encrypting the given plaintext using the enclave's public key using `crypto_box` sealed box.
+     *
+     * Learn about seal box [here](https://libsodium.gitbook.io/doc/public-key_cryptography/sealed_boxes)
+     *
+     * # Arguments
+     * * `attestation_doc_base64` - The base64-encoded attestation document
+     * * `plaintext` - The plaintext to encrypt
+     *
+     * # Returns
+     * A verified attestation containing the enclave's public key and the encrypted plaintext in base64 format.
+     *
+     * # Errors
+     * Returns an error if the base64 decoding fails or the attestation document verification fails
+     */
+    func verifyAttestationDocumentAndEncrypt(attestationDocBase64: String, plaintext: Data) throws  -> VerifiedAttestationWithCiphertext
+    
+    /**
      * Verifies a base64-encoded attestation document
      *
      * This is a convenience method that handles base64 decoding and then verifies the document
@@ -1738,6 +1945,33 @@ public convenience init() {
 
     
 
+    
+    /**
+     * Verifies a base64-encoded attestation document and encrypts the given plaintext
+     *
+     * This is a convenience method that handles base64 decoding, verifying the attestation document,
+     * and encrypting the given plaintext using the enclave's public key using `crypto_box` sealed box.
+     *
+     * Learn about seal box [here](https://libsodium.gitbook.io/doc/public-key_cryptography/sealed_boxes)
+     *
+     * # Arguments
+     * * `attestation_doc_base64` - The base64-encoded attestation document
+     * * `plaintext` - The plaintext to encrypt
+     *
+     * # Returns
+     * A verified attestation containing the enclave's public key and the encrypted plaintext in base64 format.
+     *
+     * # Errors
+     * Returns an error if the base64 decoding fails or the attestation document verification fails
+     */
+open func verifyAttestationDocumentAndEncrypt(attestationDocBase64: String, plaintext: Data)throws  -> VerifiedAttestationWithCiphertext  {
+    return try  FfiConverterTypeVerifiedAttestationWithCiphertext_lift(try rustCallWithError(FfiConverterTypeEnclaveAttestationError_lift) {
+    uniffi_bedrock_fn_method_enclaveattestationverifier_verify_attestation_document_and_encrypt(self.uniffiClonePointer(),
+        FfiConverterString.lower(attestationDocBase64),
+        FfiConverterData.lower(plaintext),$0
+    )
+})
+}
     
     /**
      * Verifies a base64-encoded attestation document
@@ -5497,7 +5731,7 @@ public func FfiConverterTypeUnparsedUserOperation_lower(_ value: UnparsedUserOpe
  */
 public struct VerifiedAttestation {
     /**
-     * The hex encoded public key of the enclave
+     * The base64 encoded public key of the enclave
      */
     public var enclavePublicKey: String
     /**
@@ -5513,7 +5747,7 @@ public struct VerifiedAttestation {
     // declare one manually.
     public init(
         /**
-         * The hex encoded public key of the enclave
+         * The base64 encoded public key of the enclave
          */enclavePublicKey: String, 
         /**
          * The timestamp of the attestation
@@ -5588,6 +5822,91 @@ public func FfiConverterTypeVerifiedAttestation_lift(_ buf: RustBuffer) throws -
 #endif
 public func FfiConverterTypeVerifiedAttestation_lower(_ value: VerifiedAttestation) -> RustBuffer {
     return FfiConverterTypeVerifiedAttestation.lower(value)
+}
+
+
+/**
+ * Verified attestation with ciphertext
+ */
+public struct VerifiedAttestationWithCiphertext {
+    /**
+     * The verified attestation
+     */
+    public var verifiedAttestation: VerifiedAttestation
+    /**
+     * The base64 encoded ciphertext
+     */
+    public var ciphertextBase64: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The verified attestation
+         */verifiedAttestation: VerifiedAttestation, 
+        /**
+         * The base64 encoded ciphertext
+         */ciphertextBase64: String) {
+        self.verifiedAttestation = verifiedAttestation
+        self.ciphertextBase64 = ciphertextBase64
+    }
+}
+
+#if compiler(>=6)
+extension VerifiedAttestationWithCiphertext: Sendable {}
+#endif
+
+
+extension VerifiedAttestationWithCiphertext: Equatable, Hashable {
+    public static func ==(lhs: VerifiedAttestationWithCiphertext, rhs: VerifiedAttestationWithCiphertext) -> Bool {
+        if lhs.verifiedAttestation != rhs.verifiedAttestation {
+            return false
+        }
+        if lhs.ciphertextBase64 != rhs.ciphertextBase64 {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(verifiedAttestation)
+        hasher.combine(ciphertextBase64)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeVerifiedAttestationWithCiphertext: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> VerifiedAttestationWithCiphertext {
+        return
+            try VerifiedAttestationWithCiphertext(
+                verifiedAttestation: FfiConverterTypeVerifiedAttestation.read(from: &buf), 
+                ciphertextBase64: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: VerifiedAttestationWithCiphertext, into buf: inout [UInt8]) {
+        FfiConverterTypeVerifiedAttestation.write(value.verifiedAttestation, into: &buf)
+        FfiConverterString.write(value.ciphertextBase64, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVerifiedAttestationWithCiphertext_lift(_ buf: RustBuffer) throws -> VerifiedAttestationWithCiphertext {
+    return try FfiConverterTypeVerifiedAttestationWithCiphertext.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVerifiedAttestationWithCiphertext_lower(_ value: VerifiedAttestationWithCiphertext) -> RustBuffer {
+    return FfiConverterTypeVerifiedAttestationWithCiphertext.lower(value)
 }
 
 
@@ -6250,6 +6569,11 @@ public enum EnclaveAttestationError: Swift.Error {
     case InvalidEnclavePublicKey(message: String)
     
     /**
+     * Failed to encrypt data
+     */
+    case EncryptionError(message: String)
+    
+    /**
      * A generic error that can wrap any anyhow error.
      */
     case Generic(message: String)
@@ -6303,11 +6627,15 @@ public struct FfiConverterTypeEnclaveAttestationError: FfiConverterRustBuffer {
             message: try FfiConverterString.read(from: &buf)
         )
         
-        case 8: return .Generic(
+        case 8: return .EncryptionError(
             message: try FfiConverterString.read(from: &buf)
         )
         
-        case 9: return .FileSystem(
+        case 9: return .Generic(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 10: return .FileSystem(
             message: try FfiConverterString.read(from: &buf)
         )
         
@@ -6336,10 +6664,12 @@ public struct FfiConverterTypeEnclaveAttestationError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(6))
         case .InvalidEnclavePublicKey(_ /* message is ignored*/):
             writeInt(&buf, Int32(7))
-        case .Generic(_ /* message is ignored*/):
+        case .EncryptionError(_ /* message is ignored*/):
             writeInt(&buf, Int32(8))
-        case .FileSystem(_ /* message is ignored*/):
+        case .Generic(_ /* message is ignored*/):
             writeInt(&buf, Int32(9))
+        case .FileSystem(_ /* message is ignored*/):
+            writeInt(&buf, Int32(10))
 
         
         }
@@ -8031,6 +8361,30 @@ extension TransferAssociation: Equatable, Hashable {}
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
+    typealias SwiftType = UInt64?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt64.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
     typealias SwiftType = String?
 
@@ -8585,7 +8939,19 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_backupserviceapi_retrieve_metadata() != 33523) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_method_bedrockaddress_as_abi_encode() != 44498) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_bedrockaddress_as_abi_encode_packed() != 29676) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_bedrockaddress_as_checksummed_str() != 54556) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_method_bedrockconfig_environment() != 53973) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_enclaveattestationverifier_verify_attestation_document_and_encrypt() != 42656) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_enclaveattestationverifier_verify_attestation_document_base64() != 59047) {
@@ -8691,6 +9057,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_backupmanager_new() != 42541) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_constructor_bedrockaddress_new() != 15876) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_bedrockconfig_new() != 53259) {
