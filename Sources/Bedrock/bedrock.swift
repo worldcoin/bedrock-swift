@@ -4478,6 +4478,352 @@ public func FfiConverterTypeToolingDemo_lower(_ value: ToolingDemo) -> UnsafeMut
 
 
 
+
+
+/**
+ * Allows interactions with Turnkey API.
+ */
+public protocol TurnkeyProtocol: AnyObject, Sendable {
+    
+    /**
+     * Decrypts the factor secret from an export bundle.
+     *
+     * The export bundle is a JSON, which contains the factor secret encrypted with the target
+     * ephemeral session key (corresponding to `session_secret_key`). The resulting factor secret is
+     * a hex-encoded 32-byte string.
+     *
+     * The export bundle is obtained from a `ACTIVITY_TYPE_EXPORT_PRIVATE_KEY` activity.
+     *
+     * Reference: <https://docs.turnkey.com/wallets/export-wallets>
+     *
+     * # Arguments
+     * - `session_secret_key`: The API private key to which the factor secret is encrypted. Corresponding
+     * P256 SEC1 non-compressed public key should've been passed in the `targetPublicKey`
+     * parameter of the "export private key" operation.
+     * - `turnkey_organization_id`: The organization ID of the Turnkey account. During recovery,
+     * it can be retrieved from backup metadata in the backup service.
+     * - `export_bundle`: The export bundle received from the Turnkey enclave.
+     * Must be a valid JSON string.
+     *
+     * # Errors
+     * - `DecodeEnclaveAuthKeyError`: Failed to decode the Turnkey enclave public key.
+     * - `DecodeApiPrivateKeyError`: Failed to decode the API private key as hex.
+     * - `InvalidApiPrivateKeyLength`: The API private key is not 32 bytes long.
+     * - `ConvertP256KeypairToHpkeKeypairError`: Failed to convert the P256 keypair to HPKE keypair.
+     * - `DecryptFactorSecretError`: Failed to decrypt the factor secret using the Turnkey enclave.
+     */
+    func decryptFactorSecret(sessionSecretKey: String, turnkeyOrganizationId: String, exportBundle: String) throws  -> String
+    
+    /**
+     * Derive a public key from the API private key for use with Turnkey's API.
+     *
+     * The public key is a hex-encoded SEC1 `EncodedPoint` representation with compression enabled
+     * of the P256 public key. This is the same implementation as Turnkey SDK.
+     *
+     * # Arguments
+     * - `api_private_key`: A P256 private key encoded in hex. 32 random bytes.
+     *
+     * # Errors
+     * - `DecodeApiPrivateKeyError`: Failed to decode the API private key as hex.
+     * - `InvalidApiPrivateKeyLength`: The API private key is not 32 bytes long.
+     */
+    func derivePublicKey(apiPrivateKey: String) throws  -> String
+    
+    /**
+     * Encrypts the factor secret using Turnkey's enclave public key.
+     *
+     * This function should be called after `INIT_IMPORT` Turnkey operation,
+     * which produces the target public key and the signature of it by Turnkey's enclave,
+     * called import bundle. This function will create an "encrypted bundle", which client app needs
+     * send to Turnkey API to be decrypted by Turnkey's enclave as part of the `IMPORT` operation.
+     *
+     * Reference: <https://docs.turnkey.com/wallets/import-wallets>
+     *
+     * # Arguments
+     * - `factor_secret`: The factor secret to be encrypted. Must be a hex-encoded 32-byte string.
+     * - `import_bundle`: The import bundle received from the Turnkey enclave. Must be a valid JSON string.
+     * - `turnkey_organization_id`: The organization ID of the Turnkey account.
+     * - `turnkey_user_id`: The user ID of the Turnkey account.
+     *
+     * # Errors
+     * - `DecodeEnclaveAuthKeyError`: Failed to decode the Turnkey enclave public key.
+     * - `DeserializeImportBundleError`: Failed to deserialize the import bundle as JSON.
+     * - `InvalidFactorSecret`: The factor secret is not a valid hex-encoded 32-byte string.
+     * - `EncryptFactorSecretError`: Failed to encrypt the factor secret using the import bundle.
+     * - `SerializeEncryptedBundleError`: Failed to serialize the encrypted bundle to a JSON string.
+     */
+    func generateImportBundleForFactorSecret(factorSecret: String, importBundle: String, turnkeyOrganizationId: String, turnkeyUserId: String) throws  -> String
+    
+    /**
+     * Generate "a stamp" that should be passed in a header to Turnkey
+     * which is used to sign the request body with the ephemeral API private key.
+     *
+     * <https://docs.turnkey.com/developer-reference/api-overview/stamps#stamps>
+     *
+     * Reference implementation: <https://github.com/tkhq/rust-sdk/blob/10b9b90cc219034782b2f9a948b342a44638061f/api_key_stamper/src/lib.rs#L29>
+     *
+     * # Arguments
+     * - `body`: The request body to be signed. Must be formatted in JSON.
+     * - `api_private_key`: A P256 private key encoded in hex. The public key of this key should be
+     * a Turnkey API key, e.g. as a long-lived token (for iCloud Keychain) or short-lived
+     * token (for temporary update sessions).
+     *
+     * # Errors
+     * - `DecodeApiPrivateKeyError`: Failed to decode the API private key as hex.
+     * - `InvalidApiPrivateKeyLength`: The API private key is not 32 bytes long.
+     * - `DecodeBodyError`: Failed to parse the request body as JSON.
+     * - `SignBodyError`: Failed to sign the request body with the private key.
+     *
+     * # Returns
+     * Base64url-encoded string that contains the signature of the request body. Should be passed in
+     * the `X-Stamp` header of the request.
+     */
+    func stamp(body: String, apiPrivateKey: String) throws  -> String
+    
+}
+/**
+ * Allows interactions with Turnkey API.
+ */
+open class Turnkey: TurnkeyProtocol, @unchecked Sendable {
+    fileprivate let pointer: UnsafeMutableRawPointer!
+
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoPointer {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
+        self.pointer = pointer
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noPointer: NoPointer) {
+        self.pointer = nil
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
+        return try! rustCall { uniffi_bedrock_fn_clone_turnkey(self.pointer, $0) }
+    }
+public convenience init() {
+    let pointer =
+        try! rustCall() {
+    uniffi_bedrock_fn_constructor_turnkey_new($0
+    )
+}
+    self.init(unsafeFromRawPointer: pointer)
+}
+
+    deinit {
+        guard let pointer = pointer else {
+            return
+        }
+
+        try! rustCall { uniffi_bedrock_fn_free_turnkey(pointer, $0) }
+    }
+
+    
+
+    
+    /**
+     * Decrypts the factor secret from an export bundle.
+     *
+     * The export bundle is a JSON, which contains the factor secret encrypted with the target
+     * ephemeral session key (corresponding to `session_secret_key`). The resulting factor secret is
+     * a hex-encoded 32-byte string.
+     *
+     * The export bundle is obtained from a `ACTIVITY_TYPE_EXPORT_PRIVATE_KEY` activity.
+     *
+     * Reference: <https://docs.turnkey.com/wallets/export-wallets>
+     *
+     * # Arguments
+     * - `session_secret_key`: The API private key to which the factor secret is encrypted. Corresponding
+     * P256 SEC1 non-compressed public key should've been passed in the `targetPublicKey`
+     * parameter of the "export private key" operation.
+     * - `turnkey_organization_id`: The organization ID of the Turnkey account. During recovery,
+     * it can be retrieved from backup metadata in the backup service.
+     * - `export_bundle`: The export bundle received from the Turnkey enclave.
+     * Must be a valid JSON string.
+     *
+     * # Errors
+     * - `DecodeEnclaveAuthKeyError`: Failed to decode the Turnkey enclave public key.
+     * - `DecodeApiPrivateKeyError`: Failed to decode the API private key as hex.
+     * - `InvalidApiPrivateKeyLength`: The API private key is not 32 bytes long.
+     * - `ConvertP256KeypairToHpkeKeypairError`: Failed to convert the P256 keypair to HPKE keypair.
+     * - `DecryptFactorSecretError`: Failed to decrypt the factor secret using the Turnkey enclave.
+     */
+open func decryptFactorSecret(sessionSecretKey: String, turnkeyOrganizationId: String, exportBundle: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeTurnkeyError_lift) {
+    uniffi_bedrock_fn_method_turnkey_decrypt_factor_secret(self.uniffiClonePointer(),
+        FfiConverterString.lower(sessionSecretKey),
+        FfiConverterString.lower(turnkeyOrganizationId),
+        FfiConverterString.lower(exportBundle),$0
+    )
+})
+}
+    
+    /**
+     * Derive a public key from the API private key for use with Turnkey's API.
+     *
+     * The public key is a hex-encoded SEC1 `EncodedPoint` representation with compression enabled
+     * of the P256 public key. This is the same implementation as Turnkey SDK.
+     *
+     * # Arguments
+     * - `api_private_key`: A P256 private key encoded in hex. 32 random bytes.
+     *
+     * # Errors
+     * - `DecodeApiPrivateKeyError`: Failed to decode the API private key as hex.
+     * - `InvalidApiPrivateKeyLength`: The API private key is not 32 bytes long.
+     */
+open func derivePublicKey(apiPrivateKey: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeTurnkeyError_lift) {
+    uniffi_bedrock_fn_method_turnkey_derive_public_key(self.uniffiClonePointer(),
+        FfiConverterString.lower(apiPrivateKey),$0
+    )
+})
+}
+    
+    /**
+     * Encrypts the factor secret using Turnkey's enclave public key.
+     *
+     * This function should be called after `INIT_IMPORT` Turnkey operation,
+     * which produces the target public key and the signature of it by Turnkey's enclave,
+     * called import bundle. This function will create an "encrypted bundle", which client app needs
+     * send to Turnkey API to be decrypted by Turnkey's enclave as part of the `IMPORT` operation.
+     *
+     * Reference: <https://docs.turnkey.com/wallets/import-wallets>
+     *
+     * # Arguments
+     * - `factor_secret`: The factor secret to be encrypted. Must be a hex-encoded 32-byte string.
+     * - `import_bundle`: The import bundle received from the Turnkey enclave. Must be a valid JSON string.
+     * - `turnkey_organization_id`: The organization ID of the Turnkey account.
+     * - `turnkey_user_id`: The user ID of the Turnkey account.
+     *
+     * # Errors
+     * - `DecodeEnclaveAuthKeyError`: Failed to decode the Turnkey enclave public key.
+     * - `DeserializeImportBundleError`: Failed to deserialize the import bundle as JSON.
+     * - `InvalidFactorSecret`: The factor secret is not a valid hex-encoded 32-byte string.
+     * - `EncryptFactorSecretError`: Failed to encrypt the factor secret using the import bundle.
+     * - `SerializeEncryptedBundleError`: Failed to serialize the encrypted bundle to a JSON string.
+     */
+open func generateImportBundleForFactorSecret(factorSecret: String, importBundle: String, turnkeyOrganizationId: String, turnkeyUserId: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeTurnkeyError_lift) {
+    uniffi_bedrock_fn_method_turnkey_generate_import_bundle_for_factor_secret(self.uniffiClonePointer(),
+        FfiConverterString.lower(factorSecret),
+        FfiConverterString.lower(importBundle),
+        FfiConverterString.lower(turnkeyOrganizationId),
+        FfiConverterString.lower(turnkeyUserId),$0
+    )
+})
+}
+    
+    /**
+     * Generate "a stamp" that should be passed in a header to Turnkey
+     * which is used to sign the request body with the ephemeral API private key.
+     *
+     * <https://docs.turnkey.com/developer-reference/api-overview/stamps#stamps>
+     *
+     * Reference implementation: <https://github.com/tkhq/rust-sdk/blob/10b9b90cc219034782b2f9a948b342a44638061f/api_key_stamper/src/lib.rs#L29>
+     *
+     * # Arguments
+     * - `body`: The request body to be signed. Must be formatted in JSON.
+     * - `api_private_key`: A P256 private key encoded in hex. The public key of this key should be
+     * a Turnkey API key, e.g. as a long-lived token (for iCloud Keychain) or short-lived
+     * token (for temporary update sessions).
+     *
+     * # Errors
+     * - `DecodeApiPrivateKeyError`: Failed to decode the API private key as hex.
+     * - `InvalidApiPrivateKeyLength`: The API private key is not 32 bytes long.
+     * - `DecodeBodyError`: Failed to parse the request body as JSON.
+     * - `SignBodyError`: Failed to sign the request body with the private key.
+     *
+     * # Returns
+     * Base64url-encoded string that contains the signature of the request body. Should be passed in
+     * the `X-Stamp` header of the request.
+     */
+open func stamp(body: String, apiPrivateKey: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeTurnkeyError_lift) {
+    uniffi_bedrock_fn_method_turnkey_stamp(self.uniffiClonePointer(),
+        FfiConverterString.lower(body),
+        FfiConverterString.lower(apiPrivateKey),$0
+    )
+})
+}
+    
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTurnkey: FfiConverter {
+
+    typealias FfiType = UnsafeMutableRawPointer
+    typealias SwiftType = Turnkey
+
+    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> Turnkey {
+        return Turnkey(unsafeFromRawPointer: pointer)
+    }
+
+    public static func lower(_ value: Turnkey) -> UnsafeMutableRawPointer {
+        return value.uniffiClonePointer()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Turnkey {
+        let v: UInt64 = try readInt(&buf)
+        // The Rust code won't compile if a pointer won't fit in a UInt64.
+        // We have to go via `UInt` because that's the thing that's the size of a pointer.
+        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
+        if (ptr == nil) {
+            throw UniffiInternalError.unexpectedNullPointer
+        }
+        return try lift(ptr!)
+    }
+
+    public static func write(_ value: Turnkey, into buf: inout [UInt8]) {
+        // This fiddling is because `Int` is the thing that's the same size as a pointer.
+        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
+        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTurnkey_lift(_ pointer: UnsafeMutableRawPointer) throws -> Turnkey {
+    return try FfiConverterTypeTurnkey.lift(pointer)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTurnkey_lower(_ value: Turnkey) -> UnsafeMutableRawPointer {
+    return FfiConverterTypeTurnkey.lower(value)
+}
+
+
+
+
 /**
  * Result of re-encrypting the backup keypair with a new factor secret.
  */
@@ -8358,6 +8704,170 @@ extension TransferAssociation: Equatable, Hashable {}
 
 
 
+
+public enum TurnkeyError: Swift.Error {
+
+    
+    
+    case DecodeApiPrivateKeyError(message: String)
+    
+    case InvalidApiPrivateKeyLength(message: String)
+    
+    case DecodeBodyError(message: String)
+    
+    case SerializeStampError(message: String)
+    
+    case DeserializeImportBundleError(message: String)
+    
+    case DeserializeExportBundleError(message: String)
+    
+    case InvalidFactorSecret(message: String)
+    
+    case EncryptFactorSecretError(message: String)
+    
+    case SerializeEncryptedBundleError(message: String)
+    
+    case DecryptFactorSecretError(message: String)
+    
+    case ConvertP256KeypairToHpkeKeypairError(message: String)
+    
+    case ConvertEnclavePublicKeyToVerifyingKeyError(message: String)
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTurnkeyError: FfiConverterRustBuffer {
+    typealias SwiftType = TurnkeyError
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TurnkeyError {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        
+
+        
+        case 1: return .DecodeApiPrivateKeyError(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 2: return .InvalidApiPrivateKeyLength(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 3: return .DecodeBodyError(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 4: return .SerializeStampError(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 5: return .DeserializeImportBundleError(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 6: return .DeserializeExportBundleError(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 7: return .InvalidFactorSecret(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 8: return .EncryptFactorSecretError(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 9: return .SerializeEncryptedBundleError(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 10: return .DecryptFactorSecretError(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 11: return .ConvertP256KeypairToHpkeKeypairError(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 12: return .ConvertEnclavePublicKeyToVerifyingKeyError(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: TurnkeyError, into buf: inout [UInt8]) {
+        switch value {
+
+        
+
+        
+        case .DecodeApiPrivateKeyError(_ /* message is ignored*/):
+            writeInt(&buf, Int32(1))
+        case .InvalidApiPrivateKeyLength(_ /* message is ignored*/):
+            writeInt(&buf, Int32(2))
+        case .DecodeBodyError(_ /* message is ignored*/):
+            writeInt(&buf, Int32(3))
+        case .SerializeStampError(_ /* message is ignored*/):
+            writeInt(&buf, Int32(4))
+        case .DeserializeImportBundleError(_ /* message is ignored*/):
+            writeInt(&buf, Int32(5))
+        case .DeserializeExportBundleError(_ /* message is ignored*/):
+            writeInt(&buf, Int32(6))
+        case .InvalidFactorSecret(_ /* message is ignored*/):
+            writeInt(&buf, Int32(7))
+        case .EncryptFactorSecretError(_ /* message is ignored*/):
+            writeInt(&buf, Int32(8))
+        case .SerializeEncryptedBundleError(_ /* message is ignored*/):
+            writeInt(&buf, Int32(9))
+        case .DecryptFactorSecretError(_ /* message is ignored*/):
+            writeInt(&buf, Int32(10))
+        case .ConvertP256KeypairToHpkeKeypairError(_ /* message is ignored*/):
+            writeInt(&buf, Int32(11))
+        case .ConvertEnclavePublicKeyToVerifyingKeyError(_ /* message is ignored*/):
+            writeInt(&buf, Int32(12))
+
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTurnkeyError_lift(_ buf: RustBuffer) throws -> TurnkeyError {
+    return try FfiConverterTypeTurnkeyError.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTurnkeyError_lower(_ value: TurnkeyError) -> RustBuffer {
+    return FfiConverterTypeTurnkeyError.lower(value)
+}
+
+
+extension TurnkeyError: Equatable, Hashable {}
+
+
+
+
+extension TurnkeyError: Foundation.LocalizedError {
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+}
+
+
+
+
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
@@ -9056,6 +9566,18 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_toolingdemo_test_log_levels() != 43380) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_method_turnkey_decrypt_factor_secret() != 30798) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_turnkey_derive_public_key() != 27233) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_turnkey_generate_import_bundle_for_factor_secret() != 13932) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_turnkey_stamp() != 17008) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_constructor_backupmanager_new() != 42541) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -9087,6 +9609,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_toolingdemo_new() != 46711) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_constructor_turnkey_new() != 50301) {
         return InitializationResult.apiChecksumMismatch
     }
 
