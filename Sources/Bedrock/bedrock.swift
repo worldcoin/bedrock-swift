@@ -9348,12 +9348,11 @@ public func setFilesystem(filesystem: FileSystem)  {try! rustCall() {
  * let success = setHttpClient(httpClient: httpClient)
  * ```
  */
-public func setHttpClient(httpClient: AuthenticatedHttpClient) -> Bool  {
-    return try!  FfiConverterBool.lift(try! rustCall() {
+public func setHttpClient(httpClient: AuthenticatedHttpClient)  {try! rustCall() {
     uniffi_bedrock_fn_func_set_http_client(
         FfiConverterTypeAuthenticatedHttpClient_lower(httpClient),$0
     )
-})
+}
 }
 /**
  * Sets the global logger.
@@ -9422,7 +9421,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_func_set_filesystem() != 48486) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_func_set_http_client() != 61435) {
+    if (uniffi_bedrock_checksum_func_set_http_client() != 61430) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_func_set_logger() != 47849) {
