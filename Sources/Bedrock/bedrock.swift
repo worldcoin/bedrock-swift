@@ -6180,9 +6180,9 @@ public struct VerifiedAttestationWithCiphertext {
      */
     public var verifiedAttestation: VerifiedAttestation
     /**
-     * The base64 encoded ciphertext
+     * The ciphertext bytes
      */
-    public var ciphertextBase64: String
+    public var ciphertext: Data
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -6191,10 +6191,10 @@ public struct VerifiedAttestationWithCiphertext {
          * The verified attestation
          */verifiedAttestation: VerifiedAttestation, 
         /**
-         * The base64 encoded ciphertext
-         */ciphertextBase64: String) {
+         * The ciphertext bytes
+         */ciphertext: Data) {
         self.verifiedAttestation = verifiedAttestation
-        self.ciphertextBase64 = ciphertextBase64
+        self.ciphertext = ciphertext
     }
 }
 
@@ -6208,7 +6208,7 @@ extension VerifiedAttestationWithCiphertext: Equatable, Hashable {
         if lhs.verifiedAttestation != rhs.verifiedAttestation {
             return false
         }
-        if lhs.ciphertextBase64 != rhs.ciphertextBase64 {
+        if lhs.ciphertext != rhs.ciphertext {
             return false
         }
         return true
@@ -6216,7 +6216,7 @@ extension VerifiedAttestationWithCiphertext: Equatable, Hashable {
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(verifiedAttestation)
-        hasher.combine(ciphertextBase64)
+        hasher.combine(ciphertext)
     }
 }
 
@@ -6230,13 +6230,13 @@ public struct FfiConverterTypeVerifiedAttestationWithCiphertext: FfiConverterRus
         return
             try VerifiedAttestationWithCiphertext(
                 verifiedAttestation: FfiConverterTypeVerifiedAttestation.read(from: &buf), 
-                ciphertextBase64: FfiConverterString.read(from: &buf)
+                ciphertext: FfiConverterData.read(from: &buf)
         )
     }
 
     public static func write(_ value: VerifiedAttestationWithCiphertext, into buf: inout [UInt8]) {
         FfiConverterTypeVerifiedAttestation.write(value.verifiedAttestation, into: &buf)
-        FfiConverterString.write(value.ciphertextBase64, into: &buf)
+        FfiConverterData.write(value.ciphertext, into: &buf)
     }
 }
 
