@@ -438,6 +438,22 @@ fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterInt64: FfiConverterPrimitive {
+    typealias FfiType = Int64
+    typealias SwiftType = Int64
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Int64 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: Int64, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterBool : FfiConverter {
     typealias FfiType = Int8
     typealias SwiftType = Bool
@@ -2928,6 +2944,178 @@ public func FfiConverterTypeHexEncodedData_lift(_ pointer: UnsafeMutableRawPoint
 #endif
 public func FfiConverterTypeHexEncodedData_lower(_ value: HexEncodedData) -> UnsafeMutableRawPointer {
     return FfiConverterTypeHexEncodedData.lower(value)
+}
+
+
+
+
+
+
+/**
+ * Test struct to verify HTTP client integration from foreign bindings.
+ */
+public protocol HttpClientTesterProtocol: AnyObject, Sendable {
+    
+    /**
+     * Performs an HTTP request using the injected client and returns the status code when the
+     * request fails with `HttpError::BadStatusCode`.
+     *
+     * This helper is used by foreign-language tests to verify that structured error data
+     * survives the round-trip through UniFFI.
+     *
+     * # Errors
+     * - `HttpError::Generic` if the HTTP client is not initialized
+     * - `HttpError::BadStatusCode` if the request fails with a bad status code
+     * - `HttpError` if the request fails with any other error
+     */
+    func fetchBadStatusCode(url: String, method: HttpMethod, headers: [HttpHeader], body: Data?) async throws  -> UInt64
+    
+}
+/**
+ * Test struct to verify HTTP client integration from foreign bindings.
+ */
+open class HttpClientTester: HttpClientTesterProtocol, @unchecked Sendable {
+    fileprivate let pointer: UnsafeMutableRawPointer!
+
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoPointer {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
+        self.pointer = pointer
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noPointer: NoPointer) {
+        self.pointer = nil
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
+        return try! rustCall { uniffi_bedrock_fn_clone_httpclienttester(self.pointer, $0) }
+    }
+    /**
+     * Creates a new `HttpClientTester` instance.
+     */
+public convenience init() {
+    let pointer =
+        try! rustCall() {
+    uniffi_bedrock_fn_constructor_httpclienttester_new($0
+    )
+}
+    self.init(unsafeFromRawPointer: pointer)
+}
+
+    deinit {
+        guard let pointer = pointer else {
+            return
+        }
+
+        try! rustCall { uniffi_bedrock_fn_free_httpclienttester(pointer, $0) }
+    }
+
+    
+
+    
+    /**
+     * Performs an HTTP request using the injected client and returns the status code when the
+     * request fails with `HttpError::BadStatusCode`.
+     *
+     * This helper is used by foreign-language tests to verify that structured error data
+     * survives the round-trip through UniFFI.
+     *
+     * # Errors
+     * - `HttpError::Generic` if the HTTP client is not initialized
+     * - `HttpError::BadStatusCode` if the request fails with a bad status code
+     * - `HttpError` if the request fails with any other error
+     */
+open func fetchBadStatusCode(url: String, method: HttpMethod, headers: [HttpHeader], body: Data?)async throws  -> UInt64  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_httpclienttester_fetch_bad_status_code(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(url),FfiConverterTypeHttpMethod_lower(method),FfiConverterSequenceTypeHttpHeader.lower(headers),FfiConverterOptionData.lower(body)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_u64,
+            completeFunc: ffi_bedrock_rust_future_complete_u64,
+            freeFunc: ffi_bedrock_rust_future_free_u64,
+            liftFunc: FfiConverterUInt64.lift,
+            errorHandler: FfiConverterTypeHttpError_lift
+        )
+}
+    
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeHttpClientTester: FfiConverter {
+
+    typealias FfiType = UnsafeMutableRawPointer
+    typealias SwiftType = HttpClientTester
+
+    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> HttpClientTester {
+        return HttpClientTester(unsafeFromRawPointer: pointer)
+    }
+
+    public static func lower(_ value: HttpClientTester) -> UnsafeMutableRawPointer {
+        return value.uniffiClonePointer()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> HttpClientTester {
+        let v: UInt64 = try readInt(&buf)
+        // The Rust code won't compile if a pointer won't fit in a UInt64.
+        // We have to go via `UInt` because that's the thing that's the size of a pointer.
+        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
+        if (ptr == nil) {
+            throw UniffiInternalError.unexpectedNullPointer
+        }
+        return try lift(ptr!)
+    }
+
+    public static func write(_ value: HttpClientTester, into buf: inout [UInt8]) {
+        // This fiddling is because `Int` is the thing that's the same size as a pointer.
+        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
+        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeHttpClientTester_lift(_ pointer: UnsafeMutableRawPointer) throws -> HttpClientTester {
+    return try FfiConverterTypeHttpClientTester.lift(pointer)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeHttpClientTester_lower(_ value: HttpClientTester) -> UnsafeMutableRawPointer {
+    return FfiConverterTypeHttpClientTester.lower(value)
 }
 
 
@@ -6266,116 +6454,111 @@ public enum BackupError: Swift.Error {
     /**
      * Failed to decode factor secret as hex.
      */
-    case DecodeFactorSecretError(message: String)
-    
+    case DecodeFactorSecretError
     /**
      * Factor secret is not the expected length.
      */
-    case InvalidFactorSecretLengthError(message: String)
-    
+    case InvalidFactorSecretLengthError
     /**
      * Failed to decode backup keypair bytes.
      */
-    case DecodeBackupKeypairError(message: String)
-    
+    case DecodeBackupKeypairError
     /**
      * Failed to decrypt backup keypair with factor secret.
      */
-    case DecryptBackupKeypairError(message: String)
-    
+    case DecryptBackupKeypairError
     /**
      * Failed to decrypt sealed backup data with backup keypair.
      */
-    case DecryptBackupError(message: String)
-    
+    case DecryptBackupError
     /**
      * Provided sealed backup data is empty or malformed.
      */
-    case InvalidSealedBackupError(message: String)
-    
+    case InvalidSealedBackupError
     /**
      * Failed to encrypt data using provided key.
      */
-    case EncryptBackupError(message: String)
-    
+    case EncryptBackupError
     /**
      * IO error while reading/writing backup data.
      */
-    case IoError(message: String)
-    
+    case IoError(String
+    )
     /**
      * Root secret inside backup is invalid.
      */
-    case InvalidRootSecretError(message: String)
-    
+    case InvalidRootSecretError
     /**
      * Backup version cannot be detected.
      */
-    case VersionNotDetectedError(message: String)
-    
+    case VersionNotDetectedError
     /**
      * Failed to read file name from archive entry.
      */
-    case ReadFileNameError(message: String)
-    
+    case ReadFileNameError
     /**
      * Failed to encode root secret to JSON.
      */
-    case EncodeRootSecretError(message: String)
-    
+    case EncodeRootSecretError
     /**
      * The provided file from a manifest to build the unsealed backup is not valid.
      * The provided file from a manifest to build the unsealed backup is not valid.
      */
-    case InvalidFileForBackup(message: String)
-    
+    case InvalidFileForBackup(String
+    )
     /**
      * CBOR encoding error while writing a backup file.
      */
-    case EncodeBackupFileError(message: String)
-    
+    case EncodeBackupFileError(String
+    )
     /**
      * CBOR decoding error while reading a backup file.
      */
-    case DecodeBackupFileError(message: String)
-    
+    case DecodeBackupFileError(
+        /**
+         * The underlying decoding error, sanitized for logging.
+         */sanitizedError: String
+    )
     /**
      * Manifest file not found.
      */
-    case ManifestNotFound(message: String)
-    
+    case ManifestNotFound
     /**
      * File checksum does not match the expected value.
      */
-    case InvalidChecksumError(message: String)
-    
+    case InvalidChecksumError(
+        /**
+         * The designator associated with the file.
+         */designator: String
+    )
     /**
      * Remote manifest head is ahead of local.
      * Native layer should trigger a download/apply of the latest backup before retrying.
      * Remote manifest head is ahead of local; fetch and apply latest backup before retrying.
      */
-    case RemoteAheadStaleError(message: String)
-    
+    case RemoteAheadStaleError
     /**
-     * HTTP error.
+     * HTTP error
      */
-    case HttpError(message: String)
-    
+    case HttpError(String
+    )
     /**
      * Backup API not initialized.
      */
-    case BackupApiNotInitialized(message: String)
-    
+    case BackupApiNotInitialized
     /**
      * A generic error that can wrap any anyhow error.
      */
-    case Generic(message: String)
-    
+    case Generic(
+        /**
+         * The error message from the wrapped error.
+         */errorMessage: String
+    )
     /**
      * Filesystem operation error.
      */
-    case FileSystem(message: String)
-    
+    case FileSystem(FileSystemError
+    )
 }
 
 
@@ -6392,96 +6575,46 @@ public struct FfiConverterTypeBackupError: FfiConverterRustBuffer {
         
 
         
-        case 1: return .DecodeFactorSecretError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 2: return .InvalidFactorSecretLengthError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 3: return .DecodeBackupKeypairError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 4: return .DecryptBackupKeypairError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 5: return .DecryptBackupError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 6: return .InvalidSealedBackupError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 7: return .EncryptBackupError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+        case 1: return .DecodeFactorSecretError
+        case 2: return .InvalidFactorSecretLengthError
+        case 3: return .DecodeBackupKeypairError
+        case 4: return .DecryptBackupKeypairError
+        case 5: return .DecryptBackupError
+        case 6: return .InvalidSealedBackupError
+        case 7: return .EncryptBackupError
         case 8: return .IoError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 9: return .InvalidRootSecretError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 10: return .VersionNotDetectedError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 11: return .ReadFileNameError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 12: return .EncodeRootSecretError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterString.read(from: &buf)
+            )
+        case 9: return .InvalidRootSecretError
+        case 10: return .VersionNotDetectedError
+        case 11: return .ReadFileNameError
+        case 12: return .EncodeRootSecretError
         case 13: return .InvalidFileForBackup(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterString.read(from: &buf)
+            )
         case 14: return .EncodeBackupFileError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterString.read(from: &buf)
+            )
         case 15: return .DecodeBackupFileError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 16: return .ManifestNotFound(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            sanitizedError: try FfiConverterString.read(from: &buf)
+            )
+        case 16: return .ManifestNotFound
         case 17: return .InvalidChecksumError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 18: return .RemoteAheadStaleError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            designator: try FfiConverterString.read(from: &buf)
+            )
+        case 18: return .RemoteAheadStaleError
         case 19: return .HttpError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 20: return .BackupApiNotInitialized(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterString.read(from: &buf)
+            )
+        case 20: return .BackupApiNotInitialized
         case 21: return .Generic(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            errorMessage: try FfiConverterString.read(from: &buf)
+            )
         case 22: return .FileSystem(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterTypeFileSystemError.read(from: &buf)
+            )
 
-        default: throw UniffiInternalError.unexpectedEnumCase
+         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
@@ -6491,52 +6624,102 @@ public struct FfiConverterTypeBackupError: FfiConverterRustBuffer {
         
 
         
-        case .DecodeFactorSecretError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(1))
-        case .InvalidFactorSecretLengthError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(2))
-        case .DecodeBackupKeypairError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(3))
-        case .DecryptBackupKeypairError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(4))
-        case .DecryptBackupError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(5))
-        case .InvalidSealedBackupError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(6))
-        case .EncryptBackupError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(7))
-        case .IoError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(8))
-        case .InvalidRootSecretError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(9))
-        case .VersionNotDetectedError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(10))
-        case .ReadFileNameError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(11))
-        case .EncodeRootSecretError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(12))
-        case .InvalidFileForBackup(_ /* message is ignored*/):
-            writeInt(&buf, Int32(13))
-        case .EncodeBackupFileError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(14))
-        case .DecodeBackupFileError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(15))
-        case .ManifestNotFound(_ /* message is ignored*/):
-            writeInt(&buf, Int32(16))
-        case .InvalidChecksumError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(17))
-        case .RemoteAheadStaleError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(18))
-        case .HttpError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(19))
-        case .BackupApiNotInitialized(_ /* message is ignored*/):
-            writeInt(&buf, Int32(20))
-        case .Generic(_ /* message is ignored*/):
-            writeInt(&buf, Int32(21))
-        case .FileSystem(_ /* message is ignored*/):
-            writeInt(&buf, Int32(22))
-
         
+        case .DecodeFactorSecretError:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .InvalidFactorSecretLengthError:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .DecodeBackupKeypairError:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .DecryptBackupKeypairError:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .DecryptBackupError:
+            writeInt(&buf, Int32(5))
+        
+        
+        case .InvalidSealedBackupError:
+            writeInt(&buf, Int32(6))
+        
+        
+        case .EncryptBackupError:
+            writeInt(&buf, Int32(7))
+        
+        
+        case let .IoError(v1):
+            writeInt(&buf, Int32(8))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case .InvalidRootSecretError:
+            writeInt(&buf, Int32(9))
+        
+        
+        case .VersionNotDetectedError:
+            writeInt(&buf, Int32(10))
+        
+        
+        case .ReadFileNameError:
+            writeInt(&buf, Int32(11))
+        
+        
+        case .EncodeRootSecretError:
+            writeInt(&buf, Int32(12))
+        
+        
+        case let .InvalidFileForBackup(v1):
+            writeInt(&buf, Int32(13))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .EncodeBackupFileError(v1):
+            writeInt(&buf, Int32(14))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .DecodeBackupFileError(sanitizedError):
+            writeInt(&buf, Int32(15))
+            FfiConverterString.write(sanitizedError, into: &buf)
+            
+        
+        case .ManifestNotFound:
+            writeInt(&buf, Int32(16))
+        
+        
+        case let .InvalidChecksumError(designator):
+            writeInt(&buf, Int32(17))
+            FfiConverterString.write(designator, into: &buf)
+            
+        
+        case .RemoteAheadStaleError:
+            writeInt(&buf, Int32(18))
+        
+        
+        case let .HttpError(v1):
+            writeInt(&buf, Int32(19))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case .BackupApiNotInitialized:
+            writeInt(&buf, Int32(20))
+        
+        
+        case let .Generic(errorMessage):
+            writeInt(&buf, Int32(21))
+            FfiConverterString.write(errorMessage, into: &buf)
+            
+        
+        case let .FileSystem(v1):
+            writeInt(&buf, Int32(22))
+            FfiConverterTypeFileSystemError.write(v1, into: &buf)
+            
         }
     }
 }
@@ -6744,7 +6927,7 @@ extension BedrockEnvironment: Equatable, Hashable {}
  * Error type for demonstrating bedrock error handling patterns.
  *
  * The `#[bedrock_error]` macro automatically:
- * - Adds `#[derive(Debug, thiserror::Error, uniffi::Error)]` and `#[uniffi(flat_error)]`
+ * - Adds `#[derive(Debug, thiserror::Error, uniffi::Error)]`
  * - Adds a `Generic { message: String }` variant
  * - Implements `From<anyhow::Error>` for automatic conversion
  * - Provides helper methods for error handling
@@ -6756,28 +6939,40 @@ public enum DemoError: Swift.Error {
     /**
      * Authentication failed with a specific error code
      */
-    case AuthenticationFailed(message: String)
-    
+    case AuthenticationFailed(
+        /**
+         * The HTTP status code associated with the authentication failure
+         */code: UInt32
+    )
     /**
      * Network operation timed out after specified number of seconds
      */
-    case NetworkTimeout(message: String)
-    
+    case NetworkTimeout(
+        /**
+         * The number of seconds after which the operation timed out
+         */seconds: UInt32
+    )
     /**
      * Invalid input was provided with a descriptive message
      */
-    case InvalidInput(message: String)
-    
+    case InvalidInput(
+        /**
+         * A descriptive message explaining what was invalid about the input
+         */errorMessage: String
+    )
     /**
      * A generic error that can wrap any anyhow error.
      */
-    case Generic(message: String)
-    
+    case Generic(
+        /**
+         * The error message from the wrapped error.
+         */errorMessage: String
+    )
     /**
      * Filesystem operation error.
      */
-    case FileSystem(message: String)
-    
+    case FileSystem(FileSystemError
+    )
 }
 
 
@@ -6795,27 +6990,22 @@ public struct FfiConverterTypeDemoError: FfiConverterRustBuffer {
 
         
         case 1: return .AuthenticationFailed(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            code: try FfiConverterUInt32.read(from: &buf)
+            )
         case 2: return .NetworkTimeout(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            seconds: try FfiConverterUInt32.read(from: &buf)
+            )
         case 3: return .InvalidInput(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            errorMessage: try FfiConverterString.read(from: &buf)
+            )
         case 4: return .Generic(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            errorMessage: try FfiConverterString.read(from: &buf)
+            )
         case 5: return .FileSystem(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterTypeFileSystemError.read(from: &buf)
+            )
 
-        default: throw UniffiInternalError.unexpectedEnumCase
+         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
@@ -6825,18 +7015,31 @@ public struct FfiConverterTypeDemoError: FfiConverterRustBuffer {
         
 
         
-        case .AuthenticationFailed(_ /* message is ignored*/):
-            writeInt(&buf, Int32(1))
-        case .NetworkTimeout(_ /* message is ignored*/):
-            writeInt(&buf, Int32(2))
-        case .InvalidInput(_ /* message is ignored*/):
-            writeInt(&buf, Int32(3))
-        case .Generic(_ /* message is ignored*/):
-            writeInt(&buf, Int32(4))
-        case .FileSystem(_ /* message is ignored*/):
-            writeInt(&buf, Int32(5))
-
         
+        case let .AuthenticationFailed(code):
+            writeInt(&buf, Int32(1))
+            FfiConverterUInt32.write(code, into: &buf)
+            
+        
+        case let .NetworkTimeout(seconds):
+            writeInt(&buf, Int32(2))
+            FfiConverterUInt32.write(seconds, into: &buf)
+            
+        
+        case let .InvalidInput(errorMessage):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(errorMessage, into: &buf)
+            
+        
+        case let .Generic(errorMessage):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(errorMessage, into: &buf)
+            
+        
+        case let .FileSystem(v1):
+            writeInt(&buf, Int32(5))
+            FfiConverterTypeFileSystemError.write(v1, into: &buf)
+            
         }
     }
 }
@@ -6882,53 +7085,67 @@ public enum EnclaveAttestationError: Swift.Error {
     /**
      * Failed to parse attestation document
      */
-    case AttestationDocumentParseError(message: String)
-    
+    case AttestationDocumentParseError(String
+    )
     /**
      * Certificate chain validation failed
      */
-    case AttestationChainInvalid(message: String)
-    
+    case AttestationChainInvalid(String
+    )
     /**
      * Signature verification failed
      */
-    case AttestationSignatureInvalid(message: String)
-    
+    case AttestationSignatureInvalid(String
+    )
     /**
      * PCR value did not match the expected value
      */
-    case CodeUntrusted(message: String)
-    
+    case CodeUntrusted(
+        /**
+         * The index of the PCR value that failed validation
+         */pcrIndex: UInt32, 
+        /**
+         * The actual value of the PCR that failed validation
+         */actual: String
+    )
     /**
      * Attestation timestamp is too old
      */
-    case AttestationStale(message: String)
-    
+    case AttestationStale(
+        /**
+         * The age of the attestation in milliseconds
+         */ageMillis: UInt64, 
+        /**
+         * The maximum age of the attestation in milliseconds
+         */maxAge: UInt64
+    )
     /**
      * Invalid timestamp
      */
-    case AttestationInvalidTimestamp(message: String)
-    
+    case AttestationInvalidTimestamp(String
+    )
     /**
      * Invalid enclave public key
      */
-    case InvalidEnclavePublicKey(message: String)
-    
+    case InvalidEnclavePublicKey(String
+    )
     /**
      * Failed to encrypt data
      */
-    case EncryptionError(message: String)
-    
+    case EncryptionError
     /**
      * A generic error that can wrap any anyhow error.
      */
-    case Generic(message: String)
-    
+    case Generic(
+        /**
+         * The error message from the wrapped error.
+         */errorMessage: String
+    )
     /**
      * Filesystem operation error.
      */
-    case FileSystem(message: String)
-    
+    case FileSystem(FileSystemError
+    )
 }
 
 
@@ -6946,47 +7163,37 @@ public struct FfiConverterTypeEnclaveAttestationError: FfiConverterRustBuffer {
 
         
         case 1: return .AttestationDocumentParseError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterString.read(from: &buf)
+            )
         case 2: return .AttestationChainInvalid(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterString.read(from: &buf)
+            )
         case 3: return .AttestationSignatureInvalid(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterString.read(from: &buf)
+            )
         case 4: return .CodeUntrusted(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            pcrIndex: try FfiConverterUInt32.read(from: &buf), 
+            actual: try FfiConverterString.read(from: &buf)
+            )
         case 5: return .AttestationStale(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            ageMillis: try FfiConverterUInt64.read(from: &buf), 
+            maxAge: try FfiConverterUInt64.read(from: &buf)
+            )
         case 6: return .AttestationInvalidTimestamp(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterString.read(from: &buf)
+            )
         case 7: return .InvalidEnclavePublicKey(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 8: return .EncryptionError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterString.read(from: &buf)
+            )
+        case 8: return .EncryptionError
         case 9: return .Generic(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            errorMessage: try FfiConverterString.read(from: &buf)
+            )
         case 10: return .FileSystem(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterTypeFileSystemError.read(from: &buf)
+            )
 
-        default: throw UniffiInternalError.unexpectedEnumCase
+         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
@@ -6996,28 +7203,57 @@ public struct FfiConverterTypeEnclaveAttestationError: FfiConverterRustBuffer {
         
 
         
-        case .AttestationDocumentParseError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(1))
-        case .AttestationChainInvalid(_ /* message is ignored*/):
-            writeInt(&buf, Int32(2))
-        case .AttestationSignatureInvalid(_ /* message is ignored*/):
-            writeInt(&buf, Int32(3))
-        case .CodeUntrusted(_ /* message is ignored*/):
-            writeInt(&buf, Int32(4))
-        case .AttestationStale(_ /* message is ignored*/):
-            writeInt(&buf, Int32(5))
-        case .AttestationInvalidTimestamp(_ /* message is ignored*/):
-            writeInt(&buf, Int32(6))
-        case .InvalidEnclavePublicKey(_ /* message is ignored*/):
-            writeInt(&buf, Int32(7))
-        case .EncryptionError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(8))
-        case .Generic(_ /* message is ignored*/):
-            writeInt(&buf, Int32(9))
-        case .FileSystem(_ /* message is ignored*/):
-            writeInt(&buf, Int32(10))
-
         
+        case let .AttestationDocumentParseError(v1):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .AttestationChainInvalid(v1):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .AttestationSignatureInvalid(v1):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .CodeUntrusted(pcrIndex,actual):
+            writeInt(&buf, Int32(4))
+            FfiConverterUInt32.write(pcrIndex, into: &buf)
+            FfiConverterString.write(actual, into: &buf)
+            
+        
+        case let .AttestationStale(ageMillis,maxAge):
+            writeInt(&buf, Int32(5))
+            FfiConverterUInt64.write(ageMillis, into: &buf)
+            FfiConverterUInt64.write(maxAge, into: &buf)
+            
+        
+        case let .AttestationInvalidTimestamp(v1):
+            writeInt(&buf, Int32(6))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .InvalidEnclavePublicKey(v1):
+            writeInt(&buf, Int32(7))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case .EncryptionError:
+            writeInt(&buf, Int32(8))
+        
+        
+        case let .Generic(errorMessage):
+            writeInt(&buf, Int32(9))
+            FfiConverterString.write(errorMessage, into: &buf)
+            
+        
+        case let .FileSystem(v1):
+            writeInt(&buf, Int32(10))
+            FfiConverterTypeFileSystemError.write(v1, into: &buf)
+            
         }
     }
 }
@@ -7265,18 +7501,24 @@ public enum FileSystemTestError: Swift.Error {
     /**
      * Custom test error
      */
-    case TestError(message: String)
-    
+    case TestError(
+        /**
+         * The error message
+         */errorMessage: String
+    )
     /**
      * A generic error that can wrap any anyhow error.
      */
-    case Generic(message: String)
-    
+    case Generic(
+        /**
+         * The error message from the wrapped error.
+         */errorMessage: String
+    )
     /**
      * Filesystem operation error.
      */
-    case FileSystem(message: String)
-    
+    case FileSystem(FileSystemError
+    )
 }
 
 
@@ -7294,19 +7536,16 @@ public struct FfiConverterTypeFileSystemTestError: FfiConverterRustBuffer {
 
         
         case 1: return .TestError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            errorMessage: try FfiConverterString.read(from: &buf)
+            )
         case 2: return .Generic(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            errorMessage: try FfiConverterString.read(from: &buf)
+            )
         case 3: return .FileSystem(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterTypeFileSystemError.read(from: &buf)
+            )
 
-        default: throw UniffiInternalError.unexpectedEnumCase
+         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
@@ -7316,14 +7555,21 @@ public struct FfiConverterTypeFileSystemTestError: FfiConverterRustBuffer {
         
 
         
-        case .TestError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(1))
-        case .Generic(_ /* message is ignored*/):
-            writeInt(&buf, Int32(2))
-        case .FileSystem(_ /* message is ignored*/):
-            writeInt(&buf, Int32(3))
-
         
+        case let .TestError(errorMessage):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(errorMessage, into: &buf)
+            
+        
+        case let .Generic(errorMessage):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(errorMessage, into: &buf)
+            
+        
+        case let .FileSystem(v1):
+            writeInt(&buf, Int32(3))
+            FfiConverterTypeFileSystemError.write(v1, into: &buf)
+            
         }
     }
 }
@@ -7369,48 +7615,67 @@ public enum HttpError: Swift.Error {
     /**
      * HTTP error with specific status code (4xx, 5xx responses)
      */
-    case BadStatusCode(message: String)
-    
+    case BadStatusCode(
+        /**
+         * The HTTP status code that was returned
+         */code: UInt64, 
+        /**
+         * The response body, which may contain error details
+         */responseBody: Data
+    )
     /**
      * No internet connectivity available
      */
-    case NoConnectivity(message: String)
-    
+    case NoConnectivity
     /**
      * Request timed out
      */
-    case Timeout(message: String)
-    
+    case Timeout(
+        /**
+         * Number of seconds before timeout occurred
+         */seconds: UInt64
+    )
     /**
      * DNS resolution failed for the hostname
      */
-    case DnsResolutionFailed(message: String)
-    
+    case DnsResolutionFailed(
+        /**
+         * The hostname that failed to resolve
+         */hostname: String
+    )
     /**
      * Connection was refused by the server
      */
-    case ConnectionRefused(message: String)
-    
+    case ConnectionRefused(
+        /**
+         * The host that refused the connection
+         */host: String
+    )
     /**
      * SSL/TLS certificate validation failed
      */
-    case SslError(message: String)
-    
+    case SslError(
+        /**
+         * Reason for the SSL failure
+         */reason: String
+    )
     /**
      * The request was cancelled before completion
      */
-    case Cancelled(message: String)
-    
+    case Cancelled
     /**
      * Generic error for unexpected errors
      */
-    case Generic(message: String)
-    
+    case Generic(
+        /**
+         * The error message
+         */errorMessage: String
+    )
     /**
      * Filesystem operation error.
      */
-    case FileSystem(message: String)
-    
+    case FileSystem(FileSystemError
+    )
 }
 
 
@@ -7428,43 +7693,31 @@ public struct FfiConverterTypeHttpError: FfiConverterRustBuffer {
 
         
         case 1: return .BadStatusCode(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 2: return .NoConnectivity(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            code: try FfiConverterUInt64.read(from: &buf), 
+            responseBody: try FfiConverterData.read(from: &buf)
+            )
+        case 2: return .NoConnectivity
         case 3: return .Timeout(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            seconds: try FfiConverterUInt64.read(from: &buf)
+            )
         case 4: return .DnsResolutionFailed(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            hostname: try FfiConverterString.read(from: &buf)
+            )
         case 5: return .ConnectionRefused(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            host: try FfiConverterString.read(from: &buf)
+            )
         case 6: return .SslError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 7: return .Cancelled(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            reason: try FfiConverterString.read(from: &buf)
+            )
+        case 7: return .Cancelled
         case 8: return .Generic(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            errorMessage: try FfiConverterString.read(from: &buf)
+            )
         case 9: return .FileSystem(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterTypeFileSystemError.read(from: &buf)
+            )
 
-        default: throw UniffiInternalError.unexpectedEnumCase
+         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
@@ -7474,26 +7727,50 @@ public struct FfiConverterTypeHttpError: FfiConverterRustBuffer {
         
 
         
-        case .BadStatusCode(_ /* message is ignored*/):
-            writeInt(&buf, Int32(1))
-        case .NoConnectivity(_ /* message is ignored*/):
-            writeInt(&buf, Int32(2))
-        case .Timeout(_ /* message is ignored*/):
-            writeInt(&buf, Int32(3))
-        case .DnsResolutionFailed(_ /* message is ignored*/):
-            writeInt(&buf, Int32(4))
-        case .ConnectionRefused(_ /* message is ignored*/):
-            writeInt(&buf, Int32(5))
-        case .SslError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(6))
-        case .Cancelled(_ /* message is ignored*/):
-            writeInt(&buf, Int32(7))
-        case .Generic(_ /* message is ignored*/):
-            writeInt(&buf, Int32(8))
-        case .FileSystem(_ /* message is ignored*/):
-            writeInt(&buf, Int32(9))
-
         
+        case let .BadStatusCode(code,responseBody):
+            writeInt(&buf, Int32(1))
+            FfiConverterUInt64.write(code, into: &buf)
+            FfiConverterData.write(responseBody, into: &buf)
+            
+        
+        case .NoConnectivity:
+            writeInt(&buf, Int32(2))
+        
+        
+        case let .Timeout(seconds):
+            writeInt(&buf, Int32(3))
+            FfiConverterUInt64.write(seconds, into: &buf)
+            
+        
+        case let .DnsResolutionFailed(hostname):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(hostname, into: &buf)
+            
+        
+        case let .ConnectionRefused(host):
+            writeInt(&buf, Int32(5))
+            FfiConverterString.write(host, into: &buf)
+            
+        
+        case let .SslError(reason):
+            writeInt(&buf, Int32(6))
+            FfiConverterString.write(reason, into: &buf)
+            
+        
+        case .Cancelled:
+            writeInt(&buf, Int32(7))
+        
+        
+        case let .Generic(errorMessage):
+            writeInt(&buf, Int32(8))
+            FfiConverterString.write(errorMessage, into: &buf)
+            
+        
+        case let .FileSystem(v1):
+            writeInt(&buf, Int32(9))
+            FfiConverterTypeFileSystemError.write(v1, into: &buf)
+            
         }
     }
 }
@@ -7818,23 +8095,32 @@ public enum PrimitiveError: Swift.Error {
     /**
      * The provided string is not validly encoded hex data.
      */
-    case InvalidHexString(message: String)
-    
+    case InvalidHexString(String
+    )
     /**
      * A provided raw input could not be parsed, is incorrectly formatted, incorrectly encoded or otherwise invalid.
      */
-    case InvalidInput(message: String)
-    
+    case InvalidInput(
+        /**
+         * The name of the attribute that was invalid.
+         */attribute: String, 
+        /**
+         * Explicit failure message for the attribute validation.
+         */errorMessage: String
+    )
     /**
      * A generic error that can wrap any anyhow error.
      */
-    case Generic(message: String)
-    
+    case Generic(
+        /**
+         * The error message from the wrapped error.
+         */errorMessage: String
+    )
     /**
      * Filesystem operation error.
      */
-    case FileSystem(message: String)
-    
+    case FileSystem(FileSystemError
+    )
 }
 
 
@@ -7852,23 +8138,20 @@ public struct FfiConverterTypePrimitiveError: FfiConverterRustBuffer {
 
         
         case 1: return .InvalidHexString(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterString.read(from: &buf)
+            )
         case 2: return .InvalidInput(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            attribute: try FfiConverterString.read(from: &buf), 
+            errorMessage: try FfiConverterString.read(from: &buf)
+            )
         case 3: return .Generic(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            errorMessage: try FfiConverterString.read(from: &buf)
+            )
         case 4: return .FileSystem(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterTypeFileSystemError.read(from: &buf)
+            )
 
-        default: throw UniffiInternalError.unexpectedEnumCase
+         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
@@ -7878,16 +8161,27 @@ public struct FfiConverterTypePrimitiveError: FfiConverterRustBuffer {
         
 
         
-        case .InvalidHexString(_ /* message is ignored*/):
-            writeInt(&buf, Int32(1))
-        case .InvalidInput(_ /* message is ignored*/):
-            writeInt(&buf, Int32(2))
-        case .Generic(_ /* message is ignored*/):
-            writeInt(&buf, Int32(3))
-        case .FileSystem(_ /* message is ignored*/):
-            writeInt(&buf, Int32(4))
-
         
+        case let .InvalidHexString(v1):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .InvalidInput(attribute,errorMessage):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(attribute, into: &buf)
+            FfiConverterString.write(errorMessage, into: &buf)
+            
+        
+        case let .Generic(errorMessage):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(errorMessage, into: &buf)
+            
+        
+        case let .FileSystem(v1):
+            writeInt(&buf, Int32(4))
+            FfiConverterTypeFileSystemError.write(v1, into: &buf)
+            
         }
     }
 }
@@ -7933,18 +8227,20 @@ public enum RootKeyError: Swift.Error {
     /**
      * The provided input is likely not an actual `RootKey`. It is malformed or not the right format.
      */
-    case KeyParseError(message: String)
-    
+    case KeyParseError
     /**
      * A generic error that can wrap any anyhow error.
      */
-    case Generic(message: String)
-    
+    case Generic(
+        /**
+         * The error message from the wrapped error.
+         */errorMessage: String
+    )
     /**
      * Filesystem operation error.
      */
-    case FileSystem(message: String)
-    
+    case FileSystem(FileSystemError
+    )
 }
 
 
@@ -7961,20 +8257,15 @@ public struct FfiConverterTypeRootKeyError: FfiConverterRustBuffer {
         
 
         
-        case 1: return .KeyParseError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+        case 1: return .KeyParseError
         case 2: return .Generic(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            errorMessage: try FfiConverterString.read(from: &buf)
+            )
         case 3: return .FileSystem(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterTypeFileSystemError.read(from: &buf)
+            )
 
-        default: throw UniffiInternalError.unexpectedEnumCase
+         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
@@ -7984,14 +8275,20 @@ public struct FfiConverterTypeRootKeyError: FfiConverterRustBuffer {
         
 
         
-        case .KeyParseError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(1))
-        case .Generic(_ /* message is ignored*/):
-            writeInt(&buf, Int32(2))
-        case .FileSystem(_ /* message is ignored*/):
-            writeInt(&buf, Int32(3))
-
         
+        case .KeyParseError:
+            writeInt(&buf, Int32(1))
+        
+        
+        case let .Generic(errorMessage):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(errorMessage, into: &buf)
+            
+        
+        case let .FileSystem(v1):
+            writeInt(&buf, Int32(3))
+            FfiConverterTypeFileSystemError.write(v1, into: &buf)
+            
         }
     }
 }
@@ -8037,48 +8334,58 @@ public enum RpcError: Swift.Error {
     /**
      * HTTP request failed
      */
-    case HttpError(message: String)
-    
+    case HttpError(String
+    )
     /**
      * JSON parsing error
      */
-    case JsonError(message: String)
-    
+    case JsonError
     /**
      * RPC returned an error response
      */
-    case RpcResponseError(message: String)
-    
+    case RpcResponseError(
+        /**
+         * The error code from the RPC response
+         */code: Int64, 
+        /**
+         * The error message from the RPC response
+         */errorMessage: String
+    )
     /**
      * Invalid response format
      */
-    case InvalidResponse(message: String)
-    
+    case InvalidResponse(
+        /**
+         * The error message describing the format issue
+         */errorMessage: String
+    )
     /**
      * HTTP client has not been initialized
      */
-    case HttpClientNotInitialized(message: String)
-    
+    case HttpClientNotInitialized
     /**
      * Primitive operation error
      */
-    case PrimitiveError(message: String)
-    
+    case PrimitiveError(String
+    )
     /**
      * Safe Smart Account operation error
      */
-    case SafeSmartAccountError(message: String)
-    
+    case SafeSmartAccountError(String
+    )
     /**
      * A generic error that can wrap any anyhow error.
      */
-    case Generic(message: String)
-    
+    case Generic(
+        /**
+         * The error message from the wrapped error.
+         */errorMessage: String
+    )
     /**
      * Filesystem operation error.
      */
-    case FileSystem(message: String)
-    
+    case FileSystem(FileSystemError
+    )
 }
 
 
@@ -8096,43 +8403,31 @@ public struct FfiConverterTypeRpcError: FfiConverterRustBuffer {
 
         
         case 1: return .HttpError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 2: return .JsonError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterString.read(from: &buf)
+            )
+        case 2: return .JsonError
         case 3: return .RpcResponseError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            code: try FfiConverterInt64.read(from: &buf), 
+            errorMessage: try FfiConverterString.read(from: &buf)
+            )
         case 4: return .InvalidResponse(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 5: return .HttpClientNotInitialized(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            errorMessage: try FfiConverterString.read(from: &buf)
+            )
+        case 5: return .HttpClientNotInitialized
         case 6: return .PrimitiveError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterString.read(from: &buf)
+            )
         case 7: return .SafeSmartAccountError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterString.read(from: &buf)
+            )
         case 8: return .Generic(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            errorMessage: try FfiConverterString.read(from: &buf)
+            )
         case 9: return .FileSystem(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterTypeFileSystemError.read(from: &buf)
+            )
 
-        default: throw UniffiInternalError.unexpectedEnumCase
+         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
@@ -8142,26 +8437,50 @@ public struct FfiConverterTypeRpcError: FfiConverterRustBuffer {
         
 
         
-        case .HttpError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(1))
-        case .JsonError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(2))
-        case .RpcResponseError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(3))
-        case .InvalidResponse(_ /* message is ignored*/):
-            writeInt(&buf, Int32(4))
-        case .HttpClientNotInitialized(_ /* message is ignored*/):
-            writeInt(&buf, Int32(5))
-        case .PrimitiveError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(6))
-        case .SafeSmartAccountError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(7))
-        case .Generic(_ /* message is ignored*/):
-            writeInt(&buf, Int32(8))
-        case .FileSystem(_ /* message is ignored*/):
-            writeInt(&buf, Int32(9))
-
         
+        case let .HttpError(v1):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case .JsonError:
+            writeInt(&buf, Int32(2))
+        
+        
+        case let .RpcResponseError(code,errorMessage):
+            writeInt(&buf, Int32(3))
+            FfiConverterInt64.write(code, into: &buf)
+            FfiConverterString.write(errorMessage, into: &buf)
+            
+        
+        case let .InvalidResponse(errorMessage):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(errorMessage, into: &buf)
+            
+        
+        case .HttpClientNotInitialized:
+            writeInt(&buf, Int32(5))
+        
+        
+        case let .PrimitiveError(v1):
+            writeInt(&buf, Int32(6))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .SafeSmartAccountError(v1):
+            writeInt(&buf, Int32(7))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .Generic(errorMessage):
+            writeInt(&buf, Int32(8))
+            FfiConverterString.write(errorMessage, into: &buf)
+            
+        
+        case let .FileSystem(v1):
+            writeInt(&buf, Int32(9))
+            FfiConverterTypeFileSystemError.write(v1, into: &buf)
+            
         }
     }
 }
@@ -8367,48 +8686,57 @@ public enum SafeSmartAccountError: Swift.Error {
     /**
      * Failed to decode a hex-encoded secret key into a k256 signer.
      */
-    case KeyDecoding(message: String)
-    
+    case KeyDecoding(String
+    )
     /**
      * Error occurred during the signing process.
      */
-    case Signing(message: String)
-    
+    case Signing(String
+    )
     /**
      * Failed to parse an Ethereum address string.
      */
-    case AddressParsing(message: String)
-    
+    case AddressParsing(String
+    )
     /**
      * Failed to encode data to a specific format.
      */
-    case Encoding(message: String)
-    
+    case Encoding(String
+    )
     /**
      * For security reasons, the contract is restricted from directly signing `TypedData`.
      */
-    case RestrictedContract(message: String)
-    
+    case RestrictedContract(String
+    )
     /**
      * A provided raw input could not be parsed, is incorrectly formatted, incorrectly encoded or otherwise invalid.
      */
-    case InvalidInput(message: String)
-    
+    case InvalidInput(
+        /**
+         * The name of the attribute that was invalid.
+         */attribute: String, 
+        /**
+         * Explicit failure message for the attribute validation.
+         */errorMessage: String
+    )
     /**
      * An error occurred with a primitive type. See `PrimitiveError` for more details.
      */
-    case PrimitiveError(message: String)
-    
+    case PrimitiveError(String
+    )
     /**
      * A generic error that can wrap any anyhow error.
      */
-    case Generic(message: String)
-    
+    case Generic(
+        /**
+         * The error message from the wrapped error.
+         */errorMessage: String
+    )
     /**
      * Filesystem operation error.
      */
-    case FileSystem(message: String)
-    
+    case FileSystem(FileSystemError
+    )
 }
 
 
@@ -8426,43 +8754,35 @@ public struct FfiConverterTypeSafeSmartAccountError: FfiConverterRustBuffer {
 
         
         case 1: return .KeyDecoding(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterString.read(from: &buf)
+            )
         case 2: return .Signing(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterString.read(from: &buf)
+            )
         case 3: return .AddressParsing(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterString.read(from: &buf)
+            )
         case 4: return .Encoding(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterString.read(from: &buf)
+            )
         case 5: return .RestrictedContract(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterString.read(from: &buf)
+            )
         case 6: return .InvalidInput(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            attribute: try FfiConverterString.read(from: &buf), 
+            errorMessage: try FfiConverterString.read(from: &buf)
+            )
         case 7: return .PrimitiveError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterString.read(from: &buf)
+            )
         case 8: return .Generic(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            errorMessage: try FfiConverterString.read(from: &buf)
+            )
         case 9: return .FileSystem(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterTypeFileSystemError.read(from: &buf)
+            )
 
-        default: throw UniffiInternalError.unexpectedEnumCase
+         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
@@ -8472,26 +8792,52 @@ public struct FfiConverterTypeSafeSmartAccountError: FfiConverterRustBuffer {
         
 
         
-        case .KeyDecoding(_ /* message is ignored*/):
-            writeInt(&buf, Int32(1))
-        case .Signing(_ /* message is ignored*/):
-            writeInt(&buf, Int32(2))
-        case .AddressParsing(_ /* message is ignored*/):
-            writeInt(&buf, Int32(3))
-        case .Encoding(_ /* message is ignored*/):
-            writeInt(&buf, Int32(4))
-        case .RestrictedContract(_ /* message is ignored*/):
-            writeInt(&buf, Int32(5))
-        case .InvalidInput(_ /* message is ignored*/):
-            writeInt(&buf, Int32(6))
-        case .PrimitiveError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(7))
-        case .Generic(_ /* message is ignored*/):
-            writeInt(&buf, Int32(8))
-        case .FileSystem(_ /* message is ignored*/):
-            writeInt(&buf, Int32(9))
-
         
+        case let .KeyDecoding(v1):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .Signing(v1):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .AddressParsing(v1):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .Encoding(v1):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .RestrictedContract(v1):
+            writeInt(&buf, Int32(5))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .InvalidInput(attribute,errorMessage):
+            writeInt(&buf, Int32(6))
+            FfiConverterString.write(attribute, into: &buf)
+            FfiConverterString.write(errorMessage, into: &buf)
+            
+        
+        case let .PrimitiveError(v1):
+            writeInt(&buf, Int32(7))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .Generic(errorMessage):
+            writeInt(&buf, Int32(8))
+            FfiConverterString.write(errorMessage, into: &buf)
+            
+        
+        case let .FileSystem(v1):
+            writeInt(&buf, Int32(9))
+            FfiConverterTypeFileSystemError.write(v1, into: &buf)
+            
         }
     }
 }
@@ -8537,18 +8883,21 @@ public enum TransactionError: Swift.Error {
     /**
      * An error occurred with a primitive type. See `PrimitiveError` for more details.
      */
-    case PrimitiveError(message: String)
-    
+    case PrimitiveError(String
+    )
     /**
      * A generic error that can wrap any anyhow error.
      */
-    case Generic(message: String)
-    
+    case Generic(
+        /**
+         * The error message from the wrapped error.
+         */errorMessage: String
+    )
     /**
      * Filesystem operation error.
      */
-    case FileSystem(message: String)
-    
+    case FileSystem(FileSystemError
+    )
 }
 
 
@@ -8566,19 +8915,16 @@ public struct FfiConverterTypeTransactionError: FfiConverterRustBuffer {
 
         
         case 1: return .PrimitiveError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterString.read(from: &buf)
+            )
         case 2: return .Generic(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            errorMessage: try FfiConverterString.read(from: &buf)
+            )
         case 3: return .FileSystem(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+            try FfiConverterTypeFileSystemError.read(from: &buf)
+            )
 
-        default: throw UniffiInternalError.unexpectedEnumCase
+         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
@@ -8588,14 +8934,21 @@ public struct FfiConverterTypeTransactionError: FfiConverterRustBuffer {
         
 
         
-        case .PrimitiveError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(1))
-        case .Generic(_ /* message is ignored*/):
-            writeInt(&buf, Int32(2))
-        case .FileSystem(_ /* message is ignored*/):
-            writeInt(&buf, Int32(3))
-
         
+        case let .PrimitiveError(v1):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .Generic(errorMessage):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(errorMessage, into: &buf)
+            
+        
+        case let .FileSystem(v1):
+            writeInt(&buf, Int32(3))
+            FfiConverterTypeFileSystemError.write(v1, into: &buf)
+            
         }
     }
 }
@@ -8709,30 +9062,31 @@ public enum TurnkeyError: Swift.Error {
 
     
     
-    case DecodeApiPrivateKeyError(message: String)
-    
-    case InvalidApiPrivateKeyLength(message: String)
-    
-    case DecodeBodyError(message: String)
-    
-    case SerializeStampError(message: String)
-    
-    case DeserializeImportBundleError(message: String)
-    
-    case DeserializeExportBundleError(message: String)
-    
-    case InvalidFactorSecret(message: String)
-    
-    case EncryptFactorSecretError(message: String)
-    
-    case SerializeEncryptedBundleError(message: String)
-    
-    case DecryptFactorSecretError(message: String)
-    
-    case ConvertP256KeypairToHpkeKeypairError(message: String)
-    
-    case ConvertEnclavePublicKeyToVerifyingKeyError(message: String)
-    
+    case DecodeApiPrivateKeyError
+    case InvalidApiPrivateKeyLength
+    case DecodeBodyError
+    case SerializeStampError
+    case DeserializeImportBundleError
+    case DeserializeExportBundleError
+    case InvalidFactorSecret
+    case EncryptFactorSecretError
+    case SerializeEncryptedBundleError
+    case DecryptFactorSecretError
+    case ConvertP256KeypairToHpkeKeypairError
+    case ConvertEnclavePublicKeyToVerifyingKeyError
+    /**
+     * A generic error that can wrap any anyhow error.
+     */
+    case Generic(
+        /**
+         * The error message from the wrapped error.
+         */errorMessage: String
+    )
+    /**
+     * Filesystem operation error.
+     */
+    case FileSystem(FileSystemError
+    )
 }
 
 
@@ -8749,56 +9103,26 @@ public struct FfiConverterTypeTurnkeyError: FfiConverterRustBuffer {
         
 
         
-        case 1: return .DecodeApiPrivateKeyError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 2: return .InvalidApiPrivateKeyLength(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 3: return .DecodeBodyError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 4: return .SerializeStampError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 5: return .DeserializeImportBundleError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 6: return .DeserializeExportBundleError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 7: return .InvalidFactorSecret(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 8: return .EncryptFactorSecretError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 9: return .SerializeEncryptedBundleError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 10: return .DecryptFactorSecretError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 11: return .ConvertP256KeypairToHpkeKeypairError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 12: return .ConvertEnclavePublicKeyToVerifyingKeyError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
+        case 1: return .DecodeApiPrivateKeyError
+        case 2: return .InvalidApiPrivateKeyLength
+        case 3: return .DecodeBodyError
+        case 4: return .SerializeStampError
+        case 5: return .DeserializeImportBundleError
+        case 6: return .DeserializeExportBundleError
+        case 7: return .InvalidFactorSecret
+        case 8: return .EncryptFactorSecretError
+        case 9: return .SerializeEncryptedBundleError
+        case 10: return .DecryptFactorSecretError
+        case 11: return .ConvertP256KeypairToHpkeKeypairError
+        case 12: return .ConvertEnclavePublicKeyToVerifyingKeyError
+        case 13: return .Generic(
+            errorMessage: try FfiConverterString.read(from: &buf)
+            )
+        case 14: return .FileSystem(
+            try FfiConverterTypeFileSystemError.read(from: &buf)
+            )
 
-        default: throw UniffiInternalError.unexpectedEnumCase
+         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
@@ -8808,32 +9132,64 @@ public struct FfiConverterTypeTurnkeyError: FfiConverterRustBuffer {
         
 
         
-        case .DecodeApiPrivateKeyError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(1))
-        case .InvalidApiPrivateKeyLength(_ /* message is ignored*/):
-            writeInt(&buf, Int32(2))
-        case .DecodeBodyError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(3))
-        case .SerializeStampError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(4))
-        case .DeserializeImportBundleError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(5))
-        case .DeserializeExportBundleError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(6))
-        case .InvalidFactorSecret(_ /* message is ignored*/):
-            writeInt(&buf, Int32(7))
-        case .EncryptFactorSecretError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(8))
-        case .SerializeEncryptedBundleError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(9))
-        case .DecryptFactorSecretError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(10))
-        case .ConvertP256KeypairToHpkeKeypairError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(11))
-        case .ConvertEnclavePublicKeyToVerifyingKeyError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(12))
-
         
+        case .DecodeApiPrivateKeyError:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .InvalidApiPrivateKeyLength:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .DecodeBodyError:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .SerializeStampError:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .DeserializeImportBundleError:
+            writeInt(&buf, Int32(5))
+        
+        
+        case .DeserializeExportBundleError:
+            writeInt(&buf, Int32(6))
+        
+        
+        case .InvalidFactorSecret:
+            writeInt(&buf, Int32(7))
+        
+        
+        case .EncryptFactorSecretError:
+            writeInt(&buf, Int32(8))
+        
+        
+        case .SerializeEncryptedBundleError:
+            writeInt(&buf, Int32(9))
+        
+        
+        case .DecryptFactorSecretError:
+            writeInt(&buf, Int32(10))
+        
+        
+        case .ConvertP256KeypairToHpkeKeypairError:
+            writeInt(&buf, Int32(11))
+        
+        
+        case .ConvertEnclavePublicKeyToVerifyingKeyError:
+            writeInt(&buf, Int32(12))
+        
+        
+        case let .Generic(errorMessage):
+            writeInt(&buf, Int32(13))
+            FfiConverterString.write(errorMessage, into: &buf)
+            
+        
+        case let .FileSystem(v1):
+            writeInt(&buf, Int32(14))
+            FfiConverterTypeFileSystemError.write(v1, into: &buf)
+            
         }
     }
 }
@@ -9505,6 +9861,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_hexencodeddata_to_vec() != 19048) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_method_httpclienttester_fetch_bad_status_code() != 12129) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_method_logger_log() != 30465) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -9593,6 +9952,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_hexencodeddata_new() != 40879) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_constructor_httpclienttester_new() != 16188) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_manifestmanager_new() != 11752) {

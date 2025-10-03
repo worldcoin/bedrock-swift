@@ -1,7 +1,7 @@
 // swift-tools-version: 5.7
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
-// Release version: 0.0.18
+// Release version: 0.0.19
 
 import PackageDescription
 
@@ -23,8 +23,8 @@ let package = Package(
         ),
         .binaryTarget(
             name: "BedrockFFI",
-            url: "https://api.github.com/repos/worldcoin/bedrock-swift/releases/assets/299605595.zip",
-            checksum: "3ee4ceccf25dc784ae485dfa5f05db478ebc14a31cb6f36b5546bc4b6429d31c"
+            url: "https://api.github.com/repos/worldcoin/bedrock-swift/releases/assets/300117933.zip",
+            checksum: "980dd9db815c8ab691b55b0c9de74eaa2a39baf213484854d662e69ead720c2e"
         )
     ]
 )
