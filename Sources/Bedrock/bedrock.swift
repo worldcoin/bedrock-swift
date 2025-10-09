@@ -3711,8 +3711,14 @@ public func FfiConverterTypeManifestManager_lower(_ value: ManifestManager) -> U
  */
 public protocol RootKeyProtocol: AnyObject, Sendable {
     
+    /**
+     * Returns `true` if the provided `RootKey`s are equal by comparing internally the underlying secrets.
+     */
     func isEqualTo(other: RootKey)  -> Bool
     
+    /**
+     * Returns `true` if the `RootKey` is a version 0 key.
+     */
     func isV0()  -> Bool
     
 }
@@ -3797,6 +3803,9 @@ public static func newRandom() -> RootKey  {
     
 
     
+    /**
+     * Returns `true` if the provided `RootKey`s are equal by comparing internally the underlying secrets.
+     */
 open func isEqualTo(other: RootKey) -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
     uniffi_bedrock_fn_method_rootkey_is_equal_to(self.uniffiClonePointer(),
@@ -3805,6 +3814,9 @@ open func isEqualTo(other: RootKey) -> Bool  {
 })
 }
     
+    /**
+     * Returns `true` if the `RootKey` is a version 0 key.
+     */
 open func isV0() -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
     uniffi_bedrock_fn_method_rootkey_is_v0(self.uniffiClonePointer(),$0
@@ -5106,6 +5118,11 @@ public struct CreatedBackup {
      * The manifest hash representing the current backup state. Hex-encoded, 32-byte Blake3 hash.
      */
     public var manifestHash: String
+    /**
+     * The unique identifier for the backup account. Used to ensure that a user can only have a single backup.
+     * The remote backup service will only accept one backup per account.
+     */
+    public var backupAccountId: String
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -5122,11 +5139,16 @@ public struct CreatedBackup {
          */backupKeypairPublicKey: String, 
         /**
          * The manifest hash representing the current backup state. Hex-encoded, 32-byte Blake3 hash.
-         */manifestHash: String) {
+         */manifestHash: String, 
+        /**
+         * The unique identifier for the backup account. Used to ensure that a user can only have a single backup.
+         * The remote backup service will only accept one backup per account.
+         */backupAccountId: String) {
         self.sealedBackupData = sealedBackupData
         self.encryptedBackupKeypair = encryptedBackupKeypair
         self.backupKeypairPublicKey = backupKeypairPublicKey
         self.manifestHash = manifestHash
+        self.backupAccountId = backupAccountId
     }
 }
 
@@ -5149,6 +5171,9 @@ extension CreatedBackup: Equatable, Hashable {
         if lhs.manifestHash != rhs.manifestHash {
             return false
         }
+        if lhs.backupAccountId != rhs.backupAccountId {
+            return false
+        }
         return true
     }
 
@@ -5157,6 +5182,7 @@ extension CreatedBackup: Equatable, Hashable {
         hasher.combine(encryptedBackupKeypair)
         hasher.combine(backupKeypairPublicKey)
         hasher.combine(manifestHash)
+        hasher.combine(backupAccountId)
     }
 }
 
@@ -5172,7 +5198,8 @@ public struct FfiConverterTypeCreatedBackup: FfiConverterRustBuffer {
                 sealedBackupData: FfiConverterData.read(from: &buf), 
                 encryptedBackupKeypair: FfiConverterString.read(from: &buf), 
                 backupKeypairPublicKey: FfiConverterString.read(from: &buf), 
-                manifestHash: FfiConverterString.read(from: &buf)
+                manifestHash: FfiConverterString.read(from: &buf), 
+                backupAccountId: FfiConverterString.read(from: &buf)
         )
     }
 
@@ -5181,6 +5208,7 @@ public struct FfiConverterTypeCreatedBackup: FfiConverterRustBuffer {
         FfiConverterString.write(value.encryptedBackupKeypair, into: &buf)
         FfiConverterString.write(value.backupKeypairPublicKey, into: &buf)
         FfiConverterString.write(value.manifestHash, into: &buf)
+        FfiConverterString.write(value.backupAccountId, into: &buf)
     }
 }
 
@@ -8229,6 +8257,11 @@ public enum RootKeyError: Swift.Error {
      */
     case KeyParseError
     /**
+     * Key derivation unexpectedly fail
+     */
+    case KeyDerivation(String
+    )
+    /**
      * A generic error that can wrap any anyhow error.
      */
     case Generic(
@@ -8258,10 +8291,13 @@ public struct FfiConverterTypeRootKeyError: FfiConverterRustBuffer {
 
         
         case 1: return .KeyParseError
-        case 2: return .Generic(
+        case 2: return .KeyDerivation(
+            try FfiConverterString.read(from: &buf)
+            )
+        case 3: return .Generic(
             errorMessage: try FfiConverterString.read(from: &buf)
             )
-        case 3: return .FileSystem(
+        case 4: return .FileSystem(
             try FfiConverterTypeFileSystemError.read(from: &buf)
             )
 
@@ -8280,13 +8316,18 @@ public struct FfiConverterTypeRootKeyError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(1))
         
         
-        case let .Generic(errorMessage):
+        case let .KeyDerivation(v1):
             writeInt(&buf, Int32(2))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .Generic(errorMessage):
+            writeInt(&buf, Int32(3))
             FfiConverterString.write(errorMessage, into: &buf)
             
         
         case let .FileSystem(v1):
-            writeInt(&buf, Int32(3))
+            writeInt(&buf, Int32(4))
             FfiConverterTypeFileSystemError.write(v1, into: &buf)
             
         }
@@ -9879,10 +9920,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_manifestmanager_store_file() != 35335) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_rootkey_is_equal_to() != 2010) {
+    if (uniffi_bedrock_checksum_method_rootkey_is_equal_to() != 29866) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_rootkey_is_v0() != 36834) {
+    if (uniffi_bedrock_checksum_method_rootkey_is_v0() != 4314) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_personal_sign() != 21352) {
