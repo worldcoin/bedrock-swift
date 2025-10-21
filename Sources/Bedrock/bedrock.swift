@@ -891,6 +891,16 @@ public protocol BackupManagerProtocol: AnyObject, Sendable {
     func createSealedBackupForNewUser(rootSecret: String, factorSecret: String, factorType: FactorType) throws  -> CreatedBackup
     
     /**
+     * **For debugging purposes only**.
+     *
+     * Returns the local manifest from disk as a JSON string.
+     *
+     * # Errors
+     * Returns an error if the manifest is not found or cannot be serialized.
+     */
+    func debugGetLocalManifest() throws  -> String
+    
+    /**
      * Decrypts the sealed backup using the factor secret and the encrypted backup keypair. It then unpacks the backup
      * directly into the file system.
      *
@@ -1102,6 +1112,21 @@ open func createSealedBackupForNewUser(rootSecret: String, factorSecret: String,
         FfiConverterString.lower(rootSecret),
         FfiConverterString.lower(factorSecret),
         FfiConverterTypeFactorType_lower(factorType),$0
+    )
+})
+}
+    
+    /**
+     * **For debugging purposes only**.
+     *
+     * Returns the local manifest from disk as a JSON string.
+     *
+     * # Errors
+     * Returns an error if the manifest is not found or cannot be serialized.
+     */
+open func debugGetLocalManifest()throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeBackupError_lift) {
+    uniffi_bedrock_fn_method_backupmanager_debug_get_local_manifest(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -10713,6 +10738,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_backupmanager_create_sealed_backup_for_new_user() != 51722) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_backupmanager_debug_get_local_manifest() != 29117) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_backupmanager_decrypt_and_unpack_sealed_backup() != 30187) {
