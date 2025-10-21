@@ -922,6 +922,17 @@ public protocol BackupManagerProtocol: AnyObject, Sendable {
     func decryptAndUnpackSealedBackup(sealedBackupData: Data, encryptedBackupKeypair: String, factorSecret: String, factorType: FactorType, currentManifestHash: String) throws  -> DecryptedBackup
     
     /**
+     * Checks if the local backup is stale compared to the provided remote manifest hash.
+     *
+     * # Errors
+     * Returns an error if the remote manifest hash is invalid.
+     *
+     * # Returns
+     * Returns true if the local backup is stale, false otherwise.
+     */
+    func isLocalBackupStale(remoteManifestHash: String) throws  -> Bool
+    
+    /**
      * Should be called after the backup is disabled/deleted.
      *
      * It processes local state after the backup is disabled/deleted.
@@ -933,6 +944,21 @@ public protocol BackupManagerProtocol: AnyObject, Sendable {
      * - Returns an error if the post-processing fails.
      */
     func postDeleteBackup() throws 
+    
+    /**
+     * Send a single event by merging with base report and posting to backend.
+     *
+     * Sends events to the REST API endpoint `/v1/backup/status`.
+     *
+     * # Errors
+     * Returns an error if HTTP client is not initialized or network/serialization fails.
+     */
+    func sendEvent(kind: BackupReportEventKind, success: Bool, errorMessage: String?, timestampIso8601: String) async throws 
+    
+    /**
+     * **Client Event Streams**. Set the base report attributes for event reports.
+     */
+    func setBackupReportAttributes(input: BackupReportInput) 
     
 }
 /**
@@ -1122,6 +1148,23 @@ open func decryptAndUnpackSealedBackup(sealedBackupData: Data, encryptedBackupKe
 }
     
     /**
+     * Checks if the local backup is stale compared to the provided remote manifest hash.
+     *
+     * # Errors
+     * Returns an error if the remote manifest hash is invalid.
+     *
+     * # Returns
+     * Returns true if the local backup is stale, false otherwise.
+     */
+open func isLocalBackupStale(remoteManifestHash: String)throws  -> Bool  {
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeBackupError_lift) {
+    uniffi_bedrock_fn_method_backupmanager_is_local_backup_stale(self.uniffiClonePointer(),
+        FfiConverterString.lower(remoteManifestHash),$0
+    )
+})
+}
+    
+    /**
      * Should be called after the backup is disabled/deleted.
      *
      * It processes local state after the backup is disabled/deleted.
@@ -1134,6 +1177,41 @@ open func decryptAndUnpackSealedBackup(sealedBackupData: Data, encryptedBackupKe
      */
 open func postDeleteBackup()throws   {try rustCallWithError(FfiConverterTypeBackupError_lift) {
     uniffi_bedrock_fn_method_backupmanager_post_delete_backup(self.uniffiClonePointer(),$0
+    )
+}
+}
+    
+    /**
+     * Send a single event by merging with base report and posting to backend.
+     *
+     * Sends events to the REST API endpoint `/v1/backup/status`.
+     *
+     * # Errors
+     * Returns an error if HTTP client is not initialized or network/serialization fails.
+     */
+open func sendEvent(kind: BackupReportEventKind, success: Bool, errorMessage: String?, timestampIso8601: String)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_backupmanager_send_event(
+                    self.uniffiClonePointer(),
+                    FfiConverterTypeBackupReportEventKind_lower(kind),FfiConverterBool.lower(success),FfiConverterOptionString.lower(errorMessage),FfiConverterString.lower(timestampIso8601)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_void,
+            completeFunc: ffi_bedrock_rust_future_complete_void,
+            freeFunc: ffi_bedrock_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeBackupError_lift
+        )
+}
+    
+    /**
+     * **Client Event Streams**. Set the base report attributes for event reports.
+     */
+open func setBackupReportAttributes(input: BackupReportInput)  {try! rustCall() {
+    uniffi_bedrock_fn_method_backupmanager_set_backup_report_attributes(self.uniffiClonePointer(),
+        FfiConverterTypeBackupReportInput_lower(input),$0
     )
 }
 }
@@ -1689,6 +1767,11 @@ public protocol BedrockConfigProtocol: AnyObject, Sendable {
      */
     func environment()  -> BedrockEnvironment
     
+    /**
+     * Gets the current OS
+     */
+    func os()  -> Os
+    
 }
 /**
  * Global configuration for Bedrock
@@ -1746,11 +1829,12 @@ open class BedrockConfig: BedrockConfigProtocol, @unchecked Sendable {
      * let config = BedrockConfig(environment: .production)
      * ```
      */
-public convenience init(environment: BedrockEnvironment) {
+public convenience init(environment: BedrockEnvironment, os: Os) {
     let pointer =
         try! rustCall() {
     uniffi_bedrock_fn_constructor_bedrockconfig_new(
-        FfiConverterTypeBedrockEnvironment_lower(environment),$0
+        FfiConverterTypeBedrockEnvironment_lower(environment),
+        FfiConverterTypeOs_lower(os),$0
     )
 }
     self.init(unsafeFromRawPointer: pointer)
@@ -1773,6 +1857,16 @@ public convenience init(environment: BedrockEnvironment) {
 open func environment() -> BedrockEnvironment  {
     return try!  FfiConverterTypeBedrockEnvironment_lift(try! rustCall() {
     uniffi_bedrock_fn_method_bedrockconfig_environment(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+    /**
+     * Gets the current OS
+     */
+open func os() -> Os  {
+    return try!  FfiConverterTypeOs_lift(try! rustCall() {
+    uniffi_bedrock_fn_method_bedrockconfig_os(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -5098,6 +5192,302 @@ public func FfiConverterTypeAddNewFactorResult_lower(_ value: AddNewFactorResult
 
 
 /**
+ * Inputs supplied by foreign code (native app) for fields that cannot be derived internally
+ */
+public struct BackupReportInput {
+    /**
+     * User PKID
+     */
+    public var userPkid: String?
+    /**
+     * Whether orb verification happened after 2025-10-01
+     */
+    public var orbVerifiedAfterOct25: Bool?
+    /**
+     * Whether the user is Orb verified
+     */
+    public var isUserOrbVerified: Bool?
+    /**
+     * Whether user is document verified
+     */
+    public var isUserDocumentVerified: Bool?
+    /**
+     * Whether user has Turnkey account
+     */
+    public var hasTurnkeyAccount: Bool?
+    /**
+     * Number of sync factors
+     */
+    public var syncFactorCount: UInt32?
+    /**
+     * Encryption keys present (e.g., prf, turnkey)
+     */
+    public var encryptionKeys: [BackupReportEncryptionKeyKind]?
+    /**
+     * Main factors present
+     */
+    public var mainFactors: [BackupReportMainFactor]?
+    /**
+     * App version
+     */
+    public var appVersion: String?
+    /**
+     * Platform (OS where the app is running)
+     */
+    public var platform: Os?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * User PKID
+         */userPkid: String?, 
+        /**
+         * Whether orb verification happened after 2025-10-01
+         */orbVerifiedAfterOct25: Bool?, 
+        /**
+         * Whether the user is Orb verified
+         */isUserOrbVerified: Bool?, 
+        /**
+         * Whether user is document verified
+         */isUserDocumentVerified: Bool?, 
+        /**
+         * Whether user has Turnkey account
+         */hasTurnkeyAccount: Bool?, 
+        /**
+         * Number of sync factors
+         */syncFactorCount: UInt32?, 
+        /**
+         * Encryption keys present (e.g., prf, turnkey)
+         */encryptionKeys: [BackupReportEncryptionKeyKind]?, 
+        /**
+         * Main factors present
+         */mainFactors: [BackupReportMainFactor]?, 
+        /**
+         * App version
+         */appVersion: String?, 
+        /**
+         * Platform (OS where the app is running)
+         */platform: Os?) {
+        self.userPkid = userPkid
+        self.orbVerifiedAfterOct25 = orbVerifiedAfterOct25
+        self.isUserOrbVerified = isUserOrbVerified
+        self.isUserDocumentVerified = isUserDocumentVerified
+        self.hasTurnkeyAccount = hasTurnkeyAccount
+        self.syncFactorCount = syncFactorCount
+        self.encryptionKeys = encryptionKeys
+        self.mainFactors = mainFactors
+        self.appVersion = appVersion
+        self.platform = platform
+    }
+}
+
+#if compiler(>=6)
+extension BackupReportInput: Sendable {}
+#endif
+
+
+extension BackupReportInput: Equatable, Hashable {
+    public static func ==(lhs: BackupReportInput, rhs: BackupReportInput) -> Bool {
+        if lhs.userPkid != rhs.userPkid {
+            return false
+        }
+        if lhs.orbVerifiedAfterOct25 != rhs.orbVerifiedAfterOct25 {
+            return false
+        }
+        if lhs.isUserOrbVerified != rhs.isUserOrbVerified {
+            return false
+        }
+        if lhs.isUserDocumentVerified != rhs.isUserDocumentVerified {
+            return false
+        }
+        if lhs.hasTurnkeyAccount != rhs.hasTurnkeyAccount {
+            return false
+        }
+        if lhs.syncFactorCount != rhs.syncFactorCount {
+            return false
+        }
+        if lhs.encryptionKeys != rhs.encryptionKeys {
+            return false
+        }
+        if lhs.mainFactors != rhs.mainFactors {
+            return false
+        }
+        if lhs.appVersion != rhs.appVersion {
+            return false
+        }
+        if lhs.platform != rhs.platform {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(userPkid)
+        hasher.combine(orbVerifiedAfterOct25)
+        hasher.combine(isUserOrbVerified)
+        hasher.combine(isUserDocumentVerified)
+        hasher.combine(hasTurnkeyAccount)
+        hasher.combine(syncFactorCount)
+        hasher.combine(encryptionKeys)
+        hasher.combine(mainFactors)
+        hasher.combine(appVersion)
+        hasher.combine(platform)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBackupReportInput: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BackupReportInput {
+        return
+            try BackupReportInput(
+                userPkid: FfiConverterOptionString.read(from: &buf), 
+                orbVerifiedAfterOct25: FfiConverterOptionBool.read(from: &buf), 
+                isUserOrbVerified: FfiConverterOptionBool.read(from: &buf), 
+                isUserDocumentVerified: FfiConverterOptionBool.read(from: &buf), 
+                hasTurnkeyAccount: FfiConverterOptionBool.read(from: &buf), 
+                syncFactorCount: FfiConverterOptionUInt32.read(from: &buf), 
+                encryptionKeys: FfiConverterOptionSequenceTypeBackupReportEncryptionKeyKind.read(from: &buf), 
+                mainFactors: FfiConverterOptionSequenceTypeBackupReportMainFactor.read(from: &buf), 
+                appVersion: FfiConverterOptionString.read(from: &buf), 
+                platform: FfiConverterOptionTypeOs.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BackupReportInput, into buf: inout [UInt8]) {
+        FfiConverterOptionString.write(value.userPkid, into: &buf)
+        FfiConverterOptionBool.write(value.orbVerifiedAfterOct25, into: &buf)
+        FfiConverterOptionBool.write(value.isUserOrbVerified, into: &buf)
+        FfiConverterOptionBool.write(value.isUserDocumentVerified, into: &buf)
+        FfiConverterOptionBool.write(value.hasTurnkeyAccount, into: &buf)
+        FfiConverterOptionUInt32.write(value.syncFactorCount, into: &buf)
+        FfiConverterOptionSequenceTypeBackupReportEncryptionKeyKind.write(value.encryptionKeys, into: &buf)
+        FfiConverterOptionSequenceTypeBackupReportMainFactor.write(value.mainFactors, into: &buf)
+        FfiConverterOptionString.write(value.appVersion, into: &buf)
+        FfiConverterOptionTypeOs.write(value.platform, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupReportInput_lift(_ buf: RustBuffer) throws -> BackupReportInput {
+    return try FfiConverterTypeBackupReportInput.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupReportInput_lower(_ value: BackupReportInput) -> RustBuffer {
+    return FfiConverterTypeBackupReportInput.lower(value)
+}
+
+
+/**
+ * Minimal representation of an OIDC factor for reporting
+ */
+public struct BackupReportMainFactor {
+    /**
+     * Factor kind, e.g. OIDC
+     */
+    public var kind: String
+    /**
+     * Account type, e.g. GOOGLE
+     */
+    public var account: String
+    /**
+     * ISO 8601 string
+     */
+    public var createdAt: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Factor kind, e.g. OIDC
+         */kind: String, 
+        /**
+         * Account type, e.g. GOOGLE
+         */account: String, 
+        /**
+         * ISO 8601 string
+         */createdAt: String) {
+        self.kind = kind
+        self.account = account
+        self.createdAt = createdAt
+    }
+}
+
+#if compiler(>=6)
+extension BackupReportMainFactor: Sendable {}
+#endif
+
+
+extension BackupReportMainFactor: Equatable, Hashable {
+    public static func ==(lhs: BackupReportMainFactor, rhs: BackupReportMainFactor) -> Bool {
+        if lhs.kind != rhs.kind {
+            return false
+        }
+        if lhs.account != rhs.account {
+            return false
+        }
+        if lhs.createdAt != rhs.createdAt {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(kind)
+        hasher.combine(account)
+        hasher.combine(createdAt)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBackupReportMainFactor: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BackupReportMainFactor {
+        return
+            try BackupReportMainFactor(
+                kind: FfiConverterString.read(from: &buf), 
+                account: FfiConverterString.read(from: &buf), 
+                createdAt: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BackupReportMainFactor, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.kind, into: &buf)
+        FfiConverterString.write(value.account, into: &buf)
+        FfiConverterString.write(value.createdAt, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupReportMainFactor_lift(_ buf: RustBuffer) throws -> BackupReportMainFactor {
+    return try FfiConverterTypeBackupReportMainFactor.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupReportMainFactor_lower(_ value: BackupReportMainFactor) -> RustBuffer {
+    return FfiConverterTypeBackupReportMainFactor.lower(value)
+}
+
+
+/**
  * Result of creating a new sealed backup for a user.
  */
 public struct CreatedBackup {
@@ -5415,14 +5805,38 @@ public struct RetrieveMetadataResponsePayload {
      * The hex-encoded manifest hash.
      */
     public var manifestHash: String
+    /**
+     * Encryption keys present
+     */
+    public var encryptionKeys: [BackupReportEncryptionKeyKind]?
+    /**
+     * Number of sync factors
+     */
+    public var syncFactorCount: UInt32?
+    /**
+     * Main factors present
+     */
+    public var mainFactors: [BackupReportMainFactor]?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
     public init(
         /**
          * The hex-encoded manifest hash.
-         */manifestHash: String) {
+         */manifestHash: String, 
+        /**
+         * Encryption keys present
+         */encryptionKeys: [BackupReportEncryptionKeyKind]?, 
+        /**
+         * Number of sync factors
+         */syncFactorCount: UInt32?, 
+        /**
+         * Main factors present
+         */mainFactors: [BackupReportMainFactor]?) {
         self.manifestHash = manifestHash
+        self.encryptionKeys = encryptionKeys
+        self.syncFactorCount = syncFactorCount
+        self.mainFactors = mainFactors
     }
 }
 
@@ -5436,11 +5850,23 @@ extension RetrieveMetadataResponsePayload: Equatable, Hashable {
         if lhs.manifestHash != rhs.manifestHash {
             return false
         }
+        if lhs.encryptionKeys != rhs.encryptionKeys {
+            return false
+        }
+        if lhs.syncFactorCount != rhs.syncFactorCount {
+            return false
+        }
+        if lhs.mainFactors != rhs.mainFactors {
+            return false
+        }
         return true
     }
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(manifestHash)
+        hasher.combine(encryptionKeys)
+        hasher.combine(syncFactorCount)
+        hasher.combine(mainFactors)
     }
 }
 
@@ -5453,12 +5879,18 @@ public struct FfiConverterTypeRetrieveMetadataResponsePayload: FfiConverterRustB
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RetrieveMetadataResponsePayload {
         return
             try RetrieveMetadataResponsePayload(
-                manifestHash: FfiConverterString.read(from: &buf)
+                manifestHash: FfiConverterString.read(from: &buf), 
+                encryptionKeys: FfiConverterOptionSequenceTypeBackupReportEncryptionKeyKind.read(from: &buf), 
+                syncFactorCount: FfiConverterOptionUInt32.read(from: &buf), 
+                mainFactors: FfiConverterOptionSequenceTypeBackupReportMainFactor.read(from: &buf)
         )
     }
 
     public static func write(_ value: RetrieveMetadataResponsePayload, into buf: inout [UInt8]) {
         FfiConverterString.write(value.manifestHash, into: &buf)
+        FfiConverterOptionSequenceTypeBackupReportEncryptionKeyKind.write(value.encryptionKeys, into: &buf)
+        FfiConverterOptionUInt32.write(value.syncFactorCount, into: &buf)
+        FfiConverterOptionSequenceTypeBackupReportMainFactor.write(value.mainFactors, into: &buf)
     }
 }
 
@@ -6575,6 +7007,10 @@ public enum BackupError: Swift.Error {
      */
     case BackupApiNotInitialized
     /**
+     * Invalid manifest hash.
+     */
+    case InvalidManifestHash
+    /**
      * A generic error that can wrap any anyhow error.
      */
     case Generic(
@@ -6635,10 +7071,11 @@ public struct FfiConverterTypeBackupError: FfiConverterRustBuffer {
             try FfiConverterString.read(from: &buf)
             )
         case 20: return .BackupApiNotInitialized
-        case 21: return .Generic(
+        case 21: return .InvalidManifestHash
+        case 22: return .Generic(
             errorMessage: try FfiConverterString.read(from: &buf)
             )
-        case 22: return .FileSystem(
+        case 23: return .FileSystem(
             try FfiConverterTypeFileSystemError.read(from: &buf)
             )
 
@@ -6739,13 +7176,17 @@ public struct FfiConverterTypeBackupError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(20))
         
         
-        case let .Generic(errorMessage):
+        case .InvalidManifestHash:
             writeInt(&buf, Int32(21))
+        
+        
+        case let .Generic(errorMessage):
+            writeInt(&buf, Int32(22))
             FfiConverterString.write(errorMessage, into: &buf)
             
         
         case let .FileSystem(v1):
-            writeInt(&buf, Int32(22))
+            writeInt(&buf, Int32(23))
             FfiConverterTypeFileSystemError.write(v1, into: &buf)
             
         }
@@ -6865,6 +7306,204 @@ public func FfiConverterTypeBackupFileDesignator_lower(_ value: BackupFileDesign
 
 
 extension BackupFileDesignator: Equatable, Hashable {}
+
+
+
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * Kinds of encryption keys present in backup metadata
+ */
+
+public enum BackupReportEncryptionKeyKind {
+    
+    /**
+     * Passkey PRF-derived key
+     */
+    case prf
+    /**
+     * Turnkey-stored random key
+     */
+    case turnkey
+    /**
+     * iCloud Keychain-stored random key (iOS < 18 path)
+     */
+    case icloudKeychain
+}
+
+
+#if compiler(>=6)
+extension BackupReportEncryptionKeyKind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBackupReportEncryptionKeyKind: FfiConverterRustBuffer {
+    typealias SwiftType = BackupReportEncryptionKeyKind
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BackupReportEncryptionKeyKind {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .prf
+        
+        case 2: return .turnkey
+        
+        case 3: return .icloudKeychain
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: BackupReportEncryptionKeyKind, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .prf:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .turnkey:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .icloudKeychain:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupReportEncryptionKeyKind_lift(_ buf: RustBuffer) throws -> BackupReportEncryptionKeyKind {
+    return try FfiConverterTypeBackupReportEncryptionKeyKind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupReportEncryptionKeyKind_lower(_ value: BackupReportEncryptionKeyKind) -> RustBuffer {
+    return FfiConverterTypeBackupReportEncryptionKeyKind.lower(value)
+}
+
+
+extension BackupReportEncryptionKeyKind: Equatable, Hashable {}
+
+
+
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * High-level event kinds we care to report
+ */
+
+public enum BackupReportEventKind {
+    
+    /**
+     * Backup sync or any backup file changes (store/remove)
+     */
+    case sync
+    /**
+     * Backup enabled
+     */
+    case enable
+    /**
+     * Backup disabled
+     */
+    case disable
+    /**
+     * Add main factor
+     */
+    case addMainFactor
+    /**
+     * Remove main factor
+     */
+    case removeMainFactor
+}
+
+
+#if compiler(>=6)
+extension BackupReportEventKind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBackupReportEventKind: FfiConverterRustBuffer {
+    typealias SwiftType = BackupReportEventKind
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BackupReportEventKind {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .sync
+        
+        case 2: return .enable
+        
+        case 3: return .disable
+        
+        case 4: return .addMainFactor
+        
+        case 5: return .removeMainFactor
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: BackupReportEventKind, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .sync:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .enable:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .disable:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .addMainFactor:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .removeMainFactor:
+            writeInt(&buf, Int32(5))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupReportEventKind_lift(_ buf: RustBuffer) throws -> BackupReportEventKind {
+    return try FfiConverterTypeBackupReportEventKind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupReportEventKind_lower(_ value: BackupReportEventKind) -> RustBuffer {
+    return FfiConverterTypeBackupReportEventKind.lower(value)
+}
+
+
+extension BackupReportEventKind: Equatable, Hashable {}
 
 
 
@@ -7658,26 +8297,22 @@ public enum HttpError: Swift.Error {
     /**
      * Request timed out
      */
-    case Timeout(
-        /**
-         * Number of seconds before timeout occurred
-         */seconds: UInt64
-    )
+    case Timeout
     /**
      * DNS resolution failed for the hostname
      */
     case DnsResolutionFailed(
         /**
-         * The hostname that failed to resolve
-         */hostname: String
+         * Any additional details about the DNS resolution failure
+         */errorMessage: String
     )
     /**
      * Connection was refused by the server
      */
     case ConnectionRefused(
         /**
-         * The host that refused the connection
-         */host: String
+         * Any additional details about the connection refusal
+         */errorMessage: String
     )
     /**
      * SSL/TLS certificate validation failed
@@ -7725,14 +8360,12 @@ public struct FfiConverterTypeHttpError: FfiConverterRustBuffer {
             responseBody: try FfiConverterData.read(from: &buf)
             )
         case 2: return .NoConnectivity
-        case 3: return .Timeout(
-            seconds: try FfiConverterUInt64.read(from: &buf)
-            )
+        case 3: return .Timeout
         case 4: return .DnsResolutionFailed(
-            hostname: try FfiConverterString.read(from: &buf)
+            errorMessage: try FfiConverterString.read(from: &buf)
             )
         case 5: return .ConnectionRefused(
-            host: try FfiConverterString.read(from: &buf)
+            errorMessage: try FfiConverterString.read(from: &buf)
             )
         case 6: return .SslError(
             reason: try FfiConverterString.read(from: &buf)
@@ -7766,19 +8399,18 @@ public struct FfiConverterTypeHttpError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(2))
         
         
-        case let .Timeout(seconds):
+        case .Timeout:
             writeInt(&buf, Int32(3))
-            FfiConverterUInt64.write(seconds, into: &buf)
-            
         
-        case let .DnsResolutionFailed(hostname):
+        
+        case let .DnsResolutionFailed(errorMessage):
             writeInt(&buf, Int32(4))
-            FfiConverterString.write(hostname, into: &buf)
+            FfiConverterString.write(errorMessage, into: &buf)
             
         
-        case let .ConnectionRefused(host):
+        case let .ConnectionRefused(errorMessage):
             writeInt(&buf, Int32(5))
-            FfiConverterString.write(host, into: &buf)
+            FfiConverterString.write(errorMessage, into: &buf)
             
         
         case let .SslError(reason):
@@ -8106,6 +8738,85 @@ public func FfiConverterTypeNetwork_lower(_ value: Network) -> RustBuffer {
 
 
 extension Network: Equatable, Hashable {}
+
+
+
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * Platform enum as reported by clients
+ */
+
+public enum Os {
+    
+    /**
+     * Android platform
+     */
+    case android
+    /**
+     * iOS platform
+     */
+    case ios
+}
+
+
+#if compiler(>=6)
+extension Os: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOs: FfiConverterRustBuffer {
+    typealias SwiftType = Os
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Os {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .android
+        
+        case 2: return .ios
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: Os, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .android:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .ios:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOs_lift(_ buf: RustBuffer) throws -> Os {
+    return try FfiConverterTypeOs.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOs_lower(_ value: Os) -> RustBuffer {
+    return FfiConverterTypeOs.lower(value)
+}
+
+
+extension Os: Equatable, Hashable {}
 
 
 
@@ -9268,6 +9979,30 @@ extension TurnkeyError: Foundation.LocalizedError {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
+    typealias SwiftType = UInt32?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt32.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt32.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
     typealias SwiftType = UInt64?
 
@@ -9284,6 +10019,30 @@ fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterUInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionBool: FfiConverterRustBuffer {
+    typealias SwiftType = Bool?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterBool.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterBool.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -9388,6 +10147,30 @@ fileprivate struct FfiConverterOptionTypeBedrockConfig: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeOs: FfiConverterRustBuffer {
+    typealias SwiftType = Os?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeOs.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeOs.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeTransferAssociation: FfiConverterRustBuffer {
     typealias SwiftType = TransferAssociation?
 
@@ -9404,6 +10187,54 @@ fileprivate struct FfiConverterOptionTypeTransferAssociation: FfiConverterRustBu
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeTransferAssociation.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionSequenceTypeBackupReportMainFactor: FfiConverterRustBuffer {
+    typealias SwiftType = [BackupReportMainFactor]?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterSequenceTypeBackupReportMainFactor.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterSequenceTypeBackupReportMainFactor.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionSequenceTypeBackupReportEncryptionKeyKind: FfiConverterRustBuffer {
+    typealias SwiftType = [BackupReportEncryptionKeyKind]?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterSequenceTypeBackupReportEncryptionKeyKind.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterSequenceTypeBackupReportEncryptionKeyKind.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -9437,6 +10268,31 @@ fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeBackupReportMainFactor: FfiConverterRustBuffer {
+    typealias SwiftType = [BackupReportMainFactor]
+
+    public static func write(_ value: [BackupReportMainFactor], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeBackupReportMainFactor.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [BackupReportMainFactor] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [BackupReportMainFactor]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeBackupReportMainFactor.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeHttpHeader: FfiConverterRustBuffer {
     typealias SwiftType = [HttpHeader]
 
@@ -9454,6 +10310,31 @@ fileprivate struct FfiConverterSequenceTypeHttpHeader: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeHttpHeader.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeBackupReportEncryptionKeyKind: FfiConverterRustBuffer {
+    typealias SwiftType = [BackupReportEncryptionKeyKind]
+
+    public static func write(_ value: [BackupReportEncryptionKeyKind], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeBackupReportEncryptionKeyKind.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [BackupReportEncryptionKeyKind] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [BackupReportEncryptionKeyKind]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeBackupReportEncryptionKeyKind.read(from: &buf))
         }
         return seq
     }
@@ -9696,9 +10577,10 @@ public func setBackupServiceApi(api: BackupServiceApi) -> Bool  {
  * setConfig(environment: .staging)
  * ```
  */
-public func setConfig(environment: BedrockEnvironment)  {try! rustCall() {
+public func setConfig(environment: BedrockEnvironment, os: Os)  {try! rustCall() {
     uniffi_bedrock_fn_func_set_config(
-        FfiConverterTypeBedrockEnvironment_lower(environment),$0
+        FfiConverterTypeBedrockEnvironment_lower(environment),
+        FfiConverterTypeOs_lower(os),$0
     )
 }
 }
@@ -9812,7 +10694,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_func_set_backup_service_api() != 64228) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_func_set_config() != 25999) {
+    if (uniffi_bedrock_checksum_func_set_config() != 45515) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_func_set_filesystem() != 48486) {
@@ -9836,7 +10718,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_backupmanager_decrypt_and_unpack_sealed_backup() != 30187) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_method_backupmanager_is_local_backup_stale() != 3564) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_method_backupmanager_post_delete_backup() != 63845) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_backupmanager_send_event() != 57515) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_backupmanager_set_backup_report_attributes() != 12627) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_backupserviceapi_sync() != 58245) {
@@ -9855,6 +10746,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_bedrockconfig_environment() != 53973) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_bedrockconfig_os() != 26504) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_enclaveattestationverifier_verify_attestation_document_and_encrypt() != 42656) {
@@ -9983,7 +10877,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_constructor_bedrockaddress_new() != 15876) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_bedrockconfig_new() != 53259) {
+    if (uniffi_bedrock_checksum_constructor_bedrockconfig_new() != 36759) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_enclaveattestationverifier_new() != 12205) {
