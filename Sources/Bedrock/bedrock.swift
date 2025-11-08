@@ -352,19 +352,29 @@ private func uniffiTraitInterfaceCallWithError<T, E>(
         callStatus.pointee.errorBuf = FfiConverterString.lower(String(describing: error))
     }
 }
+// Initial value and increment amount for handles. 
+// These ensure that SWIFT handles always have the lowest bit set
+fileprivate let UNIFFI_HANDLEMAP_INITIAL: UInt64 = 1
+fileprivate let UNIFFI_HANDLEMAP_DELTA: UInt64 = 2
+
 fileprivate final class UniffiHandleMap<T>: @unchecked Sendable {
     // All mutation happens with this lock held, which is why we implement @unchecked Sendable.
     private let lock = NSLock()
     private var map: [UInt64: T] = [:]
-    private var currentHandle: UInt64 = 1
+    private var currentHandle: UInt64 = UNIFFI_HANDLEMAP_INITIAL
 
     func insert(obj: T) -> UInt64 {
         lock.withLock {
-            let handle = currentHandle
-            currentHandle += 1
-            map[handle] = obj
-            return handle
+            return doInsert(obj)
         }
+    }
+
+    // Low-level insert function, this assumes `lock` is held.
+    private func doInsert(_ obj: T) -> UInt64 {
+        let handle = currentHandle
+        currentHandle += UNIFFI_HANDLEMAP_DELTA
+        map[handle] = obj
+        return handle
     }
 
      func get(handle: UInt64) throws -> T {
@@ -373,6 +383,15 @@ fileprivate final class UniffiHandleMap<T>: @unchecked Sendable {
                 throw UniffiInternalError.unexpectedStaleHandle
             }
             return obj
+        }
+    }
+
+     func clone(handle: UInt64) throws -> UInt64 {
+        try lock.withLock {
+            guard let obj = map[handle] else {
+                throw UniffiInternalError.unexpectedStaleHandle
+            }
+            return doInsert(obj)
         }
     }
 
@@ -592,13 +611,13 @@ public protocol AuthenticatedHttpClient: AnyObject, Sendable {
  * for consistent error handling across platforms.
  */
 open class AuthenticatedHttpClientImpl: AuthenticatedHttpClient, @unchecked Sendable {
-    fileprivate let pointer: UnsafeMutableRawPointer!
+    fileprivate let handle: UInt64
 
-    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public struct NoPointer {
+    public struct NoHandle {
         public init() {}
     }
 
@@ -608,36 +627,32 @@ open class AuthenticatedHttpClientImpl: AuthenticatedHttpClient, @unchecked Send
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
-        self.pointer = pointer
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
     }
 
     // This constructor can be used to instantiate a fake object.
-    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
     //
     // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public init(noPointer: NoPointer) {
-        self.pointer = nil
+    public init(noHandle: NoHandle) {
+        self.handle = 0
     }
 
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_bedrock_fn_clone_authenticatedhttpclient(self.pointer, $0) }
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_authenticatedhttpclient(self.handle, $0) }
     }
     // No primary constructor declared for this class.
 
     deinit {
-        guard let pointer = pointer else {
-            return
-        }
-
-        try! rustCall { uniffi_bedrock_fn_free_authenticatedhttpclient(pointer, $0) }
+        try! rustCall { uniffi_bedrock_fn_free_authenticatedhttpclient(handle, $0) }
     }
 
     
@@ -677,7 +692,7 @@ open func fetchFromAppBackend(url: String, method: HttpMethod, headers: [HttpHea
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_authenticatedhttpclient_fetch_from_app_backend(
-                    self.uniffiClonePointer(),
+                    self.uniffiCloneHandle(),
                     FfiConverterString.lower(url),FfiConverterTypeHttpMethod_lower(method),FfiConverterSequenceTypeHttpHeader.lower(headers),FfiConverterOptionData.lower(body)
                 )
             },
@@ -690,7 +705,9 @@ open func fetchFromAppBackend(url: String, method: HttpMethod, headers: [HttpHea
 }
     
 
+    
 }
+
 
 
 // Put the implementation in a struct so we don't pollute the top-level namespace
@@ -702,6 +719,20 @@ fileprivate struct UniffiCallbackInterfaceAuthenticatedHttpClient {
     // This creates 1-element array, since this seems to be the only way to construct a const
     // pointer that we can pass to the Rust code.
     static let vtable: [UniffiVTableCallbackInterfaceAuthenticatedHttpClient] = [UniffiVTableCallbackInterfaceAuthenticatedHttpClient(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterTypeAuthenticatedHttpClient.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface AuthenticatedHttpClient: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterTypeAuthenticatedHttpClient.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface AuthenticatedHttpClient: handle missing in uniffiClone")
+            }
+        },
         fetchFromAppBackend: { (
             uniffiHandle: UInt64,
             url: RustBuffer,
@@ -710,7 +741,7 @@ fileprivate struct UniffiCallbackInterfaceAuthenticatedHttpClient {
             body: RustBuffer,
             uniffiFutureCallback: @escaping UniffiForeignFutureCompleteRustBuffer,
             uniffiCallbackData: UInt64,
-            uniffiOutReturn: UnsafeMutablePointer<UniffiForeignFuture>
+            uniffiOutDroppedCallback: UnsafeMutablePointer<UniffiForeignFutureDroppedCallbackStruct>
         ) in
             let makeCall = {
                 () async throws -> Data in
@@ -728,7 +759,7 @@ fileprivate struct UniffiCallbackInterfaceAuthenticatedHttpClient {
             let uniffiHandleSuccess = { (returnValue: Data) in
                 uniffiFutureCallback(
                     uniffiCallbackData,
-                    UniffiForeignFutureStructRustBuffer(
+                    UniffiForeignFutureResultRustBuffer(
                         returnValue: FfiConverterData.lower(returnValue),
                         callStatus: RustCallStatus()
                     )
@@ -737,25 +768,19 @@ fileprivate struct UniffiCallbackInterfaceAuthenticatedHttpClient {
             let uniffiHandleError = { (statusCode, errorBuf) in
                 uniffiFutureCallback(
                     uniffiCallbackData,
-                    UniffiForeignFutureStructRustBuffer(
+                    UniffiForeignFutureResultRustBuffer(
                         returnValue: RustBuffer.empty(),
                         callStatus: RustCallStatus(code: statusCode, errorBuf: errorBuf)
                     )
                 )
             }
-            let uniffiForeignFuture = uniffiTraitInterfaceCallAsyncWithError(
+            uniffiTraitInterfaceCallAsyncWithError(
                 makeCall: makeCall,
                 handleSuccess: uniffiHandleSuccess,
                 handleError: uniffiHandleError,
-                lowerError: FfiConverterTypeHttpError_lower
+                lowerError: FfiConverterTypeHttpError_lower,
+                droppedCallback: uniffiOutDroppedCallback
             )
-            uniffiOutReturn.pointee = uniffiForeignFuture
-        },
-        uniffiFree: { (uniffiHandle: UInt64) -> () in
-            let result = try? FfiConverterTypeAuthenticatedHttpClient.handleMap.remove(handle: uniffiHandle)
-            if result == nil {
-                print("Uniffi callback interface AuthenticatedHttpClient: handle missing in uniffiFree")
-            }
         }
     )]
 }
@@ -764,42 +789,43 @@ private func uniffiCallbackInitAuthenticatedHttpClient() {
     uniffi_bedrock_fn_init_callback_vtable_authenticatedhttpclient(UniffiCallbackInterfaceAuthenticatedHttpClient.vtable)
 }
 
-
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeAuthenticatedHttpClient: FfiConverter {
     fileprivate static let handleMap = UniffiHandleMap<AuthenticatedHttpClient>()
 
-    typealias FfiType = UnsafeMutableRawPointer
+    typealias FfiType = UInt64
     typealias SwiftType = AuthenticatedHttpClient
 
-    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> AuthenticatedHttpClient {
-        return AuthenticatedHttpClientImpl(unsafeFromRawPointer: pointer)
+    public static func lift(_ handle: UInt64) throws -> AuthenticatedHttpClient {
+        if ((handle & 1) == 0) {
+            // Rust-generated handle, construct a new class that uses the handle to implement the
+            // interface
+            return AuthenticatedHttpClientImpl(unsafeFromHandle: handle)
+        } else {
+            // Swift-generated handle, get the object from the handle map
+            return try handleMap.remove(handle: handle)
+        }
     }
 
-    public static func lower(_ value: AuthenticatedHttpClient) -> UnsafeMutableRawPointer {
-        guard let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: handleMap.insert(obj: value))) else {
-            fatalError("Cast to UnsafeMutableRawPointer failed")
-        }
-        return ptr
+    public static func lower(_ value: AuthenticatedHttpClient) -> UInt64 {
+         if let rustImpl = value as? AuthenticatedHttpClientImpl {
+             // Rust-implemented object.  Clone the handle and return it
+            return rustImpl.uniffiCloneHandle()
+         } else {
+            // Swift object, generate a new vtable handle and return that.
+            return handleMap.insert(obj: value)
+         }
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AuthenticatedHttpClient {
-        let v: UInt64 = try readInt(&buf)
-        // The Rust code won't compile if a pointer won't fit in a UInt64.
-        // We have to go via `UInt` because that's the thing that's the size of a pointer.
-        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
-        if (ptr == nil) {
-            throw UniffiInternalError.unexpectedNullPointer
-        }
-        return try lift(ptr!)
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
     }
 
     public static func write(_ value: AuthenticatedHttpClient, into buf: inout [UInt8]) {
-        // This fiddling is because `Int` is the thing that's the same size as a pointer.
-        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
-        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+        writeInt(&buf, lower(value))
     }
 }
 
@@ -807,14 +833,14 @@ public struct FfiConverterTypeAuthenticatedHttpClient: FfiConverter {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeAuthenticatedHttpClient_lift(_ pointer: UnsafeMutableRawPointer) throws -> AuthenticatedHttpClient {
-    return try FfiConverterTypeAuthenticatedHttpClient.lift(pointer)
+public func FfiConverterTypeAuthenticatedHttpClient_lift(_ handle: UInt64) throws -> AuthenticatedHttpClient {
+    return try FfiConverterTypeAuthenticatedHttpClient.lift(handle)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeAuthenticatedHttpClient_lower(_ value: AuthenticatedHttpClient) -> UnsafeMutableRawPointer {
+public func FfiConverterTypeAuthenticatedHttpClient_lower(_ value: AuthenticatedHttpClient) -> UInt64 {
     return FfiConverterTypeAuthenticatedHttpClient.lower(value)
 }
 
@@ -991,13 +1017,13 @@ public protocol BackupManagerProtocol: AnyObject, Sendable {
  * Documentation: <https://docs.toolsforhumanity.com/world-app/backup>
  */
 open class BackupManager: BackupManagerProtocol, @unchecked Sendable {
-    fileprivate let pointer: UnsafeMutableRawPointer!
+    fileprivate let handle: UInt64
 
-    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public struct NoPointer {
+    public struct NoHandle {
         public init() {}
     }
 
@@ -1007,46 +1033,42 @@ open class BackupManager: BackupManagerProtocol, @unchecked Sendable {
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
-        self.pointer = pointer
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
     }
 
     // This constructor can be used to instantiate a fake object.
-    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
     //
     // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public init(noPointer: NoPointer) {
-        self.pointer = nil
+    public init(noHandle: NoHandle) {
+        self.handle = 0
     }
 
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_bedrock_fn_clone_backupmanager(self.pointer, $0) }
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_backupmanager(self.handle, $0) }
     }
     /**
      * Constructs a new `BackupManager` instance.
      */
 public convenience init() {
-    let pointer =
+    let handle =
         try! rustCall() {
     uniffi_bedrock_fn_constructor_backupmanager_new($0
     )
 }
-    self.init(unsafeFromRawPointer: pointer)
+    self.init(unsafeFromHandle: handle)
 }
 
     deinit {
-        guard let pointer = pointer else {
-            return
-        }
-
-        try! rustCall { uniffi_bedrock_fn_free_backupmanager(pointer, $0) }
+        try! rustCall { uniffi_bedrock_fn_free_backupmanager(handle, $0) }
     }
 
     
@@ -1078,7 +1100,8 @@ public convenience init() {
      */
 open func addNewFactor(encryptedBackupKeyWithExistingFactorSecret: String, existingFactorSecret: String, newFactorSecret: String, existingFactorType: FactorType, newFactorType: FactorType)throws  -> AddNewFactorResult  {
     return try  FfiConverterTypeAddNewFactorResult_lift(try rustCallWithError(FfiConverterTypeBackupError_lift) {
-    uniffi_bedrock_fn_method_backupmanager_add_new_factor(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_backupmanager_add_new_factor(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(encryptedBackupKeyWithExistingFactorSecret),
         FfiConverterString.lower(existingFactorSecret),
         FfiConverterString.lower(newFactorSecret),
@@ -1108,7 +1131,8 @@ open func addNewFactor(encryptedBackupKeyWithExistingFactorSecret: String, exist
      */
 open func createSealedBackupForNewUser(rootSecret: String, factorSecret: String, factorType: FactorType)throws  -> CreatedBackup  {
     return try  FfiConverterTypeCreatedBackup_lift(try rustCallWithError(FfiConverterTypeBackupError_lift) {
-    uniffi_bedrock_fn_method_backupmanager_create_sealed_backup_for_new_user(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_backupmanager_create_sealed_backup_for_new_user(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(rootSecret),
         FfiConverterString.lower(factorSecret),
         FfiConverterTypeFactorType_lower(factorType),$0
@@ -1126,7 +1150,8 @@ open func createSealedBackupForNewUser(rootSecret: String, factorSecret: String,
      */
 open func debugGetLocalManifest()throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeBackupError_lift) {
-    uniffi_bedrock_fn_method_backupmanager_debug_get_local_manifest(self.uniffiClonePointer(),$0
+    uniffi_bedrock_fn_method_backupmanager_debug_get_local_manifest(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
@@ -1162,7 +1187,8 @@ open func debugGetLocalManifest()throws  -> String  {
      */
 open func decryptAndUnpackSealedBackup(sealedBackupData: Data, encryptedBackupKeypair: String, factorSecret: String, factorType: FactorType, currentManifestHash: String)throws  -> DecryptedBackup  {
     return try  FfiConverterTypeDecryptedBackup_lift(try rustCallWithError(FfiConverterTypeBackupError_lift) {
-    uniffi_bedrock_fn_method_backupmanager_decrypt_and_unpack_sealed_backup(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_backupmanager_decrypt_and_unpack_sealed_backup(
+            self.uniffiCloneHandle(),
         FfiConverterData.lower(sealedBackupData),
         FfiConverterString.lower(encryptedBackupKeypair),
         FfiConverterString.lower(factorSecret),
@@ -1183,7 +1209,8 @@ open func decryptAndUnpackSealedBackup(sealedBackupData: Data, encryptedBackupKe
      */
 open func isLocalBackupStale(remoteManifestHash: String)throws  -> Bool  {
     return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeBackupError_lift) {
-    uniffi_bedrock_fn_method_backupmanager_is_local_backup_stale(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_backupmanager_is_local_backup_stale(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(remoteManifestHash),$0
     )
 })
@@ -1201,7 +1228,8 @@ open func isLocalBackupStale(remoteManifestHash: String)throws  -> Bool  {
      * - Returns an error if the post-processing fails.
      */
 open func postDeleteBackup()throws   {try rustCallWithError(FfiConverterTypeBackupError_lift) {
-    uniffi_bedrock_fn_method_backupmanager_post_delete_backup(self.uniffiClonePointer(),$0
+    uniffi_bedrock_fn_method_backupmanager_post_delete_backup(
+            self.uniffiCloneHandle(),$0
     )
 }
 }
@@ -1219,7 +1247,7 @@ open func sendEvent(kind: BackupReportEventKind, success: Bool, errorMessage: St
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_backupmanager_send_event(
-                    self.uniffiClonePointer(),
+                    self.uniffiCloneHandle(),
                     FfiConverterTypeBackupReportEventKind_lower(kind),FfiConverterBool.lower(success),FfiConverterOptionString.lower(errorMessage),FfiConverterString.lower(timestampIso8601)
                 )
             },
@@ -1235,13 +1263,15 @@ open func sendEvent(kind: BackupReportEventKind, success: Bool, errorMessage: St
      * **Client Event Streams**. Set the base report attributes for event reports.
      */
 open func setBackupReportAttributes(input: BackupReportInput)  {try! rustCall() {
-    uniffi_bedrock_fn_method_backupmanager_set_backup_report_attributes(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_backupmanager_set_backup_report_attributes(
+            self.uniffiCloneHandle(),
         FfiConverterTypeBackupReportInput_lower(input),$0
     )
 }
 }
     
 
+    
 }
 
 
@@ -1249,33 +1279,24 @@ open func setBackupReportAttributes(input: BackupReportInput)  {try! rustCall() 
 @_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeBackupManager: FfiConverter {
-
-    typealias FfiType = UnsafeMutableRawPointer
+    typealias FfiType = UInt64
     typealias SwiftType = BackupManager
 
-    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> BackupManager {
-        return BackupManager(unsafeFromRawPointer: pointer)
+    public static func lift(_ handle: UInt64) throws -> BackupManager {
+        return BackupManager(unsafeFromHandle: handle)
     }
 
-    public static func lower(_ value: BackupManager) -> UnsafeMutableRawPointer {
-        return value.uniffiClonePointer()
+    public static func lower(_ value: BackupManager) -> UInt64 {
+        return value.uniffiCloneHandle()
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BackupManager {
-        let v: UInt64 = try readInt(&buf)
-        // The Rust code won't compile if a pointer won't fit in a UInt64.
-        // We have to go via `UInt` because that's the thing that's the size of a pointer.
-        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
-        if (ptr == nil) {
-            throw UniffiInternalError.unexpectedNullPointer
-        }
-        return try lift(ptr!)
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
     }
 
     public static func write(_ value: BackupManager, into buf: inout [UInt8]) {
-        // This fiddling is because `Int` is the thing that's the same size as a pointer.
-        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
-        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+        writeInt(&buf, lower(value))
     }
 }
 
@@ -1283,14 +1304,14 @@ public struct FfiConverterTypeBackupManager: FfiConverter {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeBackupManager_lift(_ pointer: UnsafeMutableRawPointer) throws -> BackupManager {
-    return try FfiConverterTypeBackupManager.lift(pointer)
+public func FfiConverterTypeBackupManager_lift(_ handle: UInt64) throws -> BackupManager {
+    return try FfiConverterTypeBackupManager.lift(handle)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeBackupManager_lower(_ value: BackupManager) -> UnsafeMutableRawPointer {
+public func FfiConverterTypeBackupManager_lower(_ value: BackupManager) -> UInt64 {
     return FfiConverterTypeBackupManager.lower(value)
 }
 
@@ -1330,13 +1351,13 @@ public protocol BackupServiceApi: AnyObject, Sendable {
  * If set, this will be used by Bedrock instead of any internal HTTP client.
  */
 open class BackupServiceApiImpl: BackupServiceApi, @unchecked Sendable {
-    fileprivate let pointer: UnsafeMutableRawPointer!
+    fileprivate let handle: UInt64
 
-    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public struct NoPointer {
+    public struct NoHandle {
         public init() {}
     }
 
@@ -1346,36 +1367,32 @@ open class BackupServiceApiImpl: BackupServiceApi, @unchecked Sendable {
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
-        self.pointer = pointer
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
     }
 
     // This constructor can be used to instantiate a fake object.
-    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
     //
     // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public init(noPointer: NoPointer) {
-        self.pointer = nil
+    public init(noHandle: NoHandle) {
+        self.handle = 0
     }
 
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_bedrock_fn_clone_backupserviceapi(self.pointer, $0) }
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_backupserviceapi(self.handle, $0) }
     }
     // No primary constructor declared for this class.
 
     deinit {
-        guard let pointer = pointer else {
-            return
-        }
-
-        try! rustCall { uniffi_bedrock_fn_free_backupserviceapi(pointer, $0) }
+        try! rustCall { uniffi_bedrock_fn_free_backupserviceapi(handle, $0) }
     }
 
     
@@ -1391,7 +1408,7 @@ open func sync(request: SyncSubmitRequest)async throws   {
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_backupserviceapi_sync(
-                    self.uniffiClonePointer(),
+                    self.uniffiCloneHandle(),
                     FfiConverterTypeSyncSubmitRequest_lower(request)
                 )
             },
@@ -1416,7 +1433,7 @@ open func retrieveMetadata()async throws  -> RetrieveMetadataResponsePayload  {
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_backupserviceapi_retrieve_metadata(
-                    self.uniffiClonePointer()
+                    self.uniffiCloneHandle()
                     
                 )
             },
@@ -1429,7 +1446,9 @@ open func retrieveMetadata()async throws  -> RetrieveMetadataResponsePayload  {
 }
     
 
+    
 }
+
 
 
 // Put the implementation in a struct so we don't pollute the top-level namespace
@@ -1441,12 +1460,26 @@ fileprivate struct UniffiCallbackInterfaceBackupServiceApi {
     // This creates 1-element array, since this seems to be the only way to construct a const
     // pointer that we can pass to the Rust code.
     static let vtable: [UniffiVTableCallbackInterfaceBackupServiceApi] = [UniffiVTableCallbackInterfaceBackupServiceApi(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterTypeBackupServiceApi.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface BackupServiceApi: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterTypeBackupServiceApi.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface BackupServiceApi: handle missing in uniffiClone")
+            }
+        },
         sync: { (
             uniffiHandle: UInt64,
             request: RustBuffer,
             uniffiFutureCallback: @escaping UniffiForeignFutureCompleteVoid,
             uniffiCallbackData: UInt64,
-            uniffiOutReturn: UnsafeMutablePointer<UniffiForeignFuture>
+            uniffiOutDroppedCallback: UnsafeMutablePointer<UniffiForeignFutureDroppedCallbackStruct>
         ) in
             let makeCall = {
                 () async throws -> () in
@@ -1461,7 +1494,7 @@ fileprivate struct UniffiCallbackInterfaceBackupServiceApi {
             let uniffiHandleSuccess = { (returnValue: ()) in
                 uniffiFutureCallback(
                     uniffiCallbackData,
-                    UniffiForeignFutureStructVoid(
+                    UniffiForeignFutureResultVoid(
                         callStatus: RustCallStatus()
                     )
                 )
@@ -1469,24 +1502,24 @@ fileprivate struct UniffiCallbackInterfaceBackupServiceApi {
             let uniffiHandleError = { (statusCode, errorBuf) in
                 uniffiFutureCallback(
                     uniffiCallbackData,
-                    UniffiForeignFutureStructVoid(
+                    UniffiForeignFutureResultVoid(
                         callStatus: RustCallStatus(code: statusCode, errorBuf: errorBuf)
                     )
                 )
             }
-            let uniffiForeignFuture = uniffiTraitInterfaceCallAsyncWithError(
+            uniffiTraitInterfaceCallAsyncWithError(
                 makeCall: makeCall,
                 handleSuccess: uniffiHandleSuccess,
                 handleError: uniffiHandleError,
-                lowerError: FfiConverterTypeHttpError_lower
+                lowerError: FfiConverterTypeHttpError_lower,
+                droppedCallback: uniffiOutDroppedCallback
             )
-            uniffiOutReturn.pointee = uniffiForeignFuture
         },
         retrieveMetadata: { (
             uniffiHandle: UInt64,
             uniffiFutureCallback: @escaping UniffiForeignFutureCompleteRustBuffer,
             uniffiCallbackData: UInt64,
-            uniffiOutReturn: UnsafeMutablePointer<UniffiForeignFuture>
+            uniffiOutDroppedCallback: UnsafeMutablePointer<UniffiForeignFutureDroppedCallbackStruct>
         ) in
             let makeCall = {
                 () async throws -> RetrieveMetadataResponsePayload in
@@ -1500,7 +1533,7 @@ fileprivate struct UniffiCallbackInterfaceBackupServiceApi {
             let uniffiHandleSuccess = { (returnValue: RetrieveMetadataResponsePayload) in
                 uniffiFutureCallback(
                     uniffiCallbackData,
-                    UniffiForeignFutureStructRustBuffer(
+                    UniffiForeignFutureResultRustBuffer(
                         returnValue: FfiConverterTypeRetrieveMetadataResponsePayload_lower(returnValue),
                         callStatus: RustCallStatus()
                     )
@@ -1509,25 +1542,19 @@ fileprivate struct UniffiCallbackInterfaceBackupServiceApi {
             let uniffiHandleError = { (statusCode, errorBuf) in
                 uniffiFutureCallback(
                     uniffiCallbackData,
-                    UniffiForeignFutureStructRustBuffer(
+                    UniffiForeignFutureResultRustBuffer(
                         returnValue: RustBuffer.empty(),
                         callStatus: RustCallStatus(code: statusCode, errorBuf: errorBuf)
                     )
                 )
             }
-            let uniffiForeignFuture = uniffiTraitInterfaceCallAsyncWithError(
+            uniffiTraitInterfaceCallAsyncWithError(
                 makeCall: makeCall,
                 handleSuccess: uniffiHandleSuccess,
                 handleError: uniffiHandleError,
-                lowerError: FfiConverterTypeHttpError_lower
+                lowerError: FfiConverterTypeHttpError_lower,
+                droppedCallback: uniffiOutDroppedCallback
             )
-            uniffiOutReturn.pointee = uniffiForeignFuture
-        },
-        uniffiFree: { (uniffiHandle: UInt64) -> () in
-            let result = try? FfiConverterTypeBackupServiceApi.handleMap.remove(handle: uniffiHandle)
-            if result == nil {
-                print("Uniffi callback interface BackupServiceApi: handle missing in uniffiFree")
-            }
         }
     )]
 }
@@ -1536,42 +1563,43 @@ private func uniffiCallbackInitBackupServiceApi() {
     uniffi_bedrock_fn_init_callback_vtable_backupserviceapi(UniffiCallbackInterfaceBackupServiceApi.vtable)
 }
 
-
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeBackupServiceApi: FfiConverter {
     fileprivate static let handleMap = UniffiHandleMap<BackupServiceApi>()
 
-    typealias FfiType = UnsafeMutableRawPointer
+    typealias FfiType = UInt64
     typealias SwiftType = BackupServiceApi
 
-    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> BackupServiceApi {
-        return BackupServiceApiImpl(unsafeFromRawPointer: pointer)
+    public static func lift(_ handle: UInt64) throws -> BackupServiceApi {
+        if ((handle & 1) == 0) {
+            // Rust-generated handle, construct a new class that uses the handle to implement the
+            // interface
+            return BackupServiceApiImpl(unsafeFromHandle: handle)
+        } else {
+            // Swift-generated handle, get the object from the handle map
+            return try handleMap.remove(handle: handle)
+        }
     }
 
-    public static func lower(_ value: BackupServiceApi) -> UnsafeMutableRawPointer {
-        guard let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: handleMap.insert(obj: value))) else {
-            fatalError("Cast to UnsafeMutableRawPointer failed")
-        }
-        return ptr
+    public static func lower(_ value: BackupServiceApi) -> UInt64 {
+         if let rustImpl = value as? BackupServiceApiImpl {
+             // Rust-implemented object.  Clone the handle and return it
+            return rustImpl.uniffiCloneHandle()
+         } else {
+            // Swift object, generate a new vtable handle and return that.
+            return handleMap.insert(obj: value)
+         }
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BackupServiceApi {
-        let v: UInt64 = try readInt(&buf)
-        // The Rust code won't compile if a pointer won't fit in a UInt64.
-        // We have to go via `UInt` because that's the thing that's the size of a pointer.
-        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
-        if (ptr == nil) {
-            throw UniffiInternalError.unexpectedNullPointer
-        }
-        return try lift(ptr!)
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
     }
 
     public static func write(_ value: BackupServiceApi, into buf: inout [UInt8]) {
-        // This fiddling is because `Int` is the thing that's the same size as a pointer.
-        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
-        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+        writeInt(&buf, lower(value))
     }
 }
 
@@ -1579,14 +1607,14 @@ public struct FfiConverterTypeBackupServiceApi: FfiConverter {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeBackupServiceApi_lift(_ pointer: UnsafeMutableRawPointer) throws -> BackupServiceApi {
-    return try FfiConverterTypeBackupServiceApi.lift(pointer)
+public func FfiConverterTypeBackupServiceApi_lift(_ handle: UInt64) throws -> BackupServiceApi {
+    return try FfiConverterTypeBackupServiceApi.lift(handle)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeBackupServiceApi_lower(_ value: BackupServiceApi) -> UnsafeMutableRawPointer {
+public func FfiConverterTypeBackupServiceApi_lower(_ value: BackupServiceApi) -> UInt64 {
     return FfiConverterTypeBackupServiceApi.lower(value)
 }
 
@@ -1626,13 +1654,13 @@ public protocol BedrockAddressProtocol: AnyObject, Sendable {
  * Wraps the `Address` type from the `alloy` crate for foreign exports.
  */
 open class BedrockAddress: BedrockAddressProtocol, @unchecked Sendable {
-    fileprivate let pointer: UnsafeMutableRawPointer!
+    fileprivate let handle: UInt64
 
-    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public struct NoPointer {
+    public struct NoHandle {
         public init() {}
     }
 
@@ -1642,27 +1670,27 @@ open class BedrockAddress: BedrockAddressProtocol, @unchecked Sendable {
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
-        self.pointer = pointer
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
     }
 
     // This constructor can be used to instantiate a fake object.
-    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
     //
     // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public init(noPointer: NoPointer) {
-        self.pointer = nil
+    public init(noHandle: NoHandle) {
+        self.handle = 0
     }
 
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_bedrock_fn_clone_bedrockaddress(self.pointer, $0) }
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_bedrockaddress(self.handle, $0) }
     }
     /**
      * Initializes a new `BedrockAddress` from a String.
@@ -1671,21 +1699,17 @@ open class BedrockAddress: BedrockAddressProtocol, @unchecked Sendable {
      * - `PrimitiveError::InvalidInput` if the provided string is not a valid Ethereum address.
      */
 public convenience init(address: String)throws  {
-    let pointer =
+    let handle =
         try rustCallWithError(FfiConverterTypePrimitiveError_lift) {
     uniffi_bedrock_fn_constructor_bedrockaddress_new(
         FfiConverterString.lower(address),$0
     )
 }
-    self.init(unsafeFromRawPointer: pointer)
+    self.init(unsafeFromHandle: handle)
 }
 
     deinit {
-        guard let pointer = pointer else {
-            return
-        }
-
-        try! rustCall { uniffi_bedrock_fn_free_bedrockaddress(pointer, $0) }
+        try! rustCall { uniffi_bedrock_fn_free_bedrockaddress(handle, $0) }
     }
 
     
@@ -1696,7 +1720,8 @@ public convenience init(address: String)throws  {
      */
 open func asAbiEncode() -> Data  {
     return try!  FfiConverterData.lift(try! rustCall() {
-    uniffi_bedrock_fn_method_bedrockaddress_as_abi_encode(self.uniffiClonePointer(),$0
+    uniffi_bedrock_fn_method_bedrockaddress_as_abi_encode(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
@@ -1706,7 +1731,8 @@ open func asAbiEncode() -> Data  {
      */
 open func asAbiEncodePacked() -> Data  {
     return try!  FfiConverterData.lift(try! rustCall() {
-    uniffi_bedrock_fn_method_bedrockaddress_as_abi_encode_packed(self.uniffiClonePointer(),$0
+    uniffi_bedrock_fn_method_bedrockaddress_as_abi_encode_packed(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
@@ -1718,13 +1744,15 @@ open func asAbiEncodePacked() -> Data  {
      */
 open func asChecksummedStr(chainId: UInt64?) -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
-    uniffi_bedrock_fn_method_bedrockaddress_as_checksummed_str(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_bedrockaddress_as_checksummed_str(
+            self.uniffiCloneHandle(),
         FfiConverterOptionUInt64.lower(chainId),$0
     )
 })
 }
     
 
+    
 }
 
 
@@ -1732,33 +1760,24 @@ open func asChecksummedStr(chainId: UInt64?) -> String  {
 @_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeBedrockAddress: FfiConverter {
-
-    typealias FfiType = UnsafeMutableRawPointer
+    typealias FfiType = UInt64
     typealias SwiftType = BedrockAddress
 
-    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> BedrockAddress {
-        return BedrockAddress(unsafeFromRawPointer: pointer)
+    public static func lift(_ handle: UInt64) throws -> BedrockAddress {
+        return BedrockAddress(unsafeFromHandle: handle)
     }
 
-    public static func lower(_ value: BedrockAddress) -> UnsafeMutableRawPointer {
-        return value.uniffiClonePointer()
+    public static func lower(_ value: BedrockAddress) -> UInt64 {
+        return value.uniffiCloneHandle()
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BedrockAddress {
-        let v: UInt64 = try readInt(&buf)
-        // The Rust code won't compile if a pointer won't fit in a UInt64.
-        // We have to go via `UInt` because that's the thing that's the size of a pointer.
-        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
-        if (ptr == nil) {
-            throw UniffiInternalError.unexpectedNullPointer
-        }
-        return try lift(ptr!)
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
     }
 
     public static func write(_ value: BedrockAddress, into buf: inout [UInt8]) {
-        // This fiddling is because `Int` is the thing that's the same size as a pointer.
-        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
-        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+        writeInt(&buf, lower(value))
     }
 }
 
@@ -1766,14 +1785,14 @@ public struct FfiConverterTypeBedrockAddress: FfiConverter {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeBedrockAddress_lift(_ pointer: UnsafeMutableRawPointer) throws -> BedrockAddress {
-    return try FfiConverterTypeBedrockAddress.lift(pointer)
+public func FfiConverterTypeBedrockAddress_lift(_ handle: UInt64) throws -> BedrockAddress {
+    return try FfiConverterTypeBedrockAddress.lift(handle)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeBedrockAddress_lower(_ value: BedrockAddress) -> UnsafeMutableRawPointer {
+public func FfiConverterTypeBedrockAddress_lower(_ value: BedrockAddress) -> UInt64 {
     return FfiConverterTypeBedrockAddress.lower(value)
 }
 
@@ -1802,13 +1821,13 @@ public protocol BedrockConfigProtocol: AnyObject, Sendable {
  * Global configuration for Bedrock
  */
 open class BedrockConfig: BedrockConfigProtocol, @unchecked Sendable {
-    fileprivate let pointer: UnsafeMutableRawPointer!
+    fileprivate let handle: UInt64
 
-    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public struct NoPointer {
+    public struct NoHandle {
         public init() {}
     }
 
@@ -1818,27 +1837,27 @@ open class BedrockConfig: BedrockConfigProtocol, @unchecked Sendable {
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
-        self.pointer = pointer
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
     }
 
     // This constructor can be used to instantiate a fake object.
-    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
     //
     // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public init(noPointer: NoPointer) {
-        self.pointer = nil
+    public init(noHandle: NoHandle) {
+        self.handle = 0
     }
 
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_bedrock_fn_clone_bedrockconfig(self.pointer, $0) }
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_bedrockconfig(self.handle, $0) }
     }
     /**
      * Creates a new `BedrockConfig` with the specified environment
@@ -1855,22 +1874,18 @@ open class BedrockConfig: BedrockConfigProtocol, @unchecked Sendable {
      * ```
      */
 public convenience init(environment: BedrockEnvironment, os: Os) {
-    let pointer =
+    let handle =
         try! rustCall() {
     uniffi_bedrock_fn_constructor_bedrockconfig_new(
         FfiConverterTypeBedrockEnvironment_lower(environment),
         FfiConverterTypeOs_lower(os),$0
     )
 }
-    self.init(unsafeFromRawPointer: pointer)
+    self.init(unsafeFromHandle: handle)
 }
 
     deinit {
-        guard let pointer = pointer else {
-            return
-        }
-
-        try! rustCall { uniffi_bedrock_fn_free_bedrockconfig(pointer, $0) }
+        try! rustCall { uniffi_bedrock_fn_free_bedrockconfig(handle, $0) }
     }
 
     
@@ -1881,7 +1896,8 @@ public convenience init(environment: BedrockEnvironment, os: Os) {
      */
 open func environment() -> BedrockEnvironment  {
     return try!  FfiConverterTypeBedrockEnvironment_lift(try! rustCall() {
-    uniffi_bedrock_fn_method_bedrockconfig_environment(self.uniffiClonePointer(),$0
+    uniffi_bedrock_fn_method_bedrockconfig_environment(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
@@ -1891,12 +1907,14 @@ open func environment() -> BedrockEnvironment  {
      */
 open func os() -> Os  {
     return try!  FfiConverterTypeOs_lift(try! rustCall() {
-    uniffi_bedrock_fn_method_bedrockconfig_os(self.uniffiClonePointer(),$0
+    uniffi_bedrock_fn_method_bedrockconfig_os(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
 
+    
 }
 
 
@@ -1904,33 +1922,24 @@ open func os() -> Os  {
 @_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeBedrockConfig: FfiConverter {
-
-    typealias FfiType = UnsafeMutableRawPointer
+    typealias FfiType = UInt64
     typealias SwiftType = BedrockConfig
 
-    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> BedrockConfig {
-        return BedrockConfig(unsafeFromRawPointer: pointer)
+    public static func lift(_ handle: UInt64) throws -> BedrockConfig {
+        return BedrockConfig(unsafeFromHandle: handle)
     }
 
-    public static func lower(_ value: BedrockConfig) -> UnsafeMutableRawPointer {
-        return value.uniffiClonePointer()
+    public static func lower(_ value: BedrockConfig) -> UInt64 {
+        return value.uniffiCloneHandle()
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BedrockConfig {
-        let v: UInt64 = try readInt(&buf)
-        // The Rust code won't compile if a pointer won't fit in a UInt64.
-        // We have to go via `UInt` because that's the thing that's the size of a pointer.
-        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
-        if (ptr == nil) {
-            throw UniffiInternalError.unexpectedNullPointer
-        }
-        return try lift(ptr!)
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
     }
 
     public static func write(_ value: BedrockConfig, into buf: inout [UInt8]) {
-        // This fiddling is because `Int` is the thing that's the same size as a pointer.
-        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
-        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+        writeInt(&buf, lower(value))
     }
 }
 
@@ -1938,14 +1947,14 @@ public struct FfiConverterTypeBedrockConfig: FfiConverter {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeBedrockConfig_lift(_ pointer: UnsafeMutableRawPointer) throws -> BedrockConfig {
-    return try FfiConverterTypeBedrockConfig.lift(pointer)
+public func FfiConverterTypeBedrockConfig_lift(_ handle: UInt64) throws -> BedrockConfig {
+    return try FfiConverterTypeBedrockConfig.lift(handle)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeBedrockConfig_lower(_ value: BedrockConfig) -> UnsafeMutableRawPointer {
+public func FfiConverterTypeBedrockConfig_lower(_ value: BedrockConfig) -> UInt64 {
     return FfiConverterTypeBedrockConfig.lower(value)
 }
 
@@ -2014,13 +2023,13 @@ public protocol EnclaveAttestationVerifierProtocol: AnyObject, Sendable {
  * - Public key extraction
  */
 open class EnclaveAttestationVerifier: EnclaveAttestationVerifierProtocol, @unchecked Sendable {
-    fileprivate let pointer: UnsafeMutableRawPointer!
+    fileprivate let handle: UInt64
 
-    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public struct NoPointer {
+    public struct NoHandle {
         public init() {}
     }
 
@@ -2030,27 +2039,27 @@ open class EnclaveAttestationVerifier: EnclaveAttestationVerifierProtocol, @unch
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
-        self.pointer = pointer
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
     }
 
     // This constructor can be used to instantiate a fake object.
-    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
     //
     // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public init(noPointer: NoPointer) {
-        self.pointer = nil
+    public init(noHandle: NoHandle) {
+        self.handle = 0
     }
 
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_bedrock_fn_clone_enclaveattestationverifier(self.pointer, $0) }
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_enclaveattestationverifier(self.handle, $0) }
     }
     /**
      * Creates a new `EnclaveAttestationVerifier`
@@ -2062,20 +2071,16 @@ open class EnclaveAttestationVerifier: EnclaveAttestationVerifierProtocol, @unch
      * Panics if the Bedrock config is not initialized.
      */
 public convenience init() {
-    let pointer =
+    let handle =
         try! rustCall() {
     uniffi_bedrock_fn_constructor_enclaveattestationverifier_new($0
     )
 }
-    self.init(unsafeFromRawPointer: pointer)
+    self.init(unsafeFromHandle: handle)
 }
 
     deinit {
-        guard let pointer = pointer else {
-            return
-        }
-
-        try! rustCall { uniffi_bedrock_fn_free_enclaveattestationverifier(pointer, $0) }
+        try! rustCall { uniffi_bedrock_fn_free_enclaveattestationverifier(handle, $0) }
     }
 
     
@@ -2101,7 +2106,8 @@ public convenience init() {
      */
 open func verifyAttestationDocumentAndEncrypt(attestationDocBase64: String, plaintext: Data)throws  -> VerifiedAttestationWithCiphertext  {
     return try  FfiConverterTypeVerifiedAttestationWithCiphertext_lift(try rustCallWithError(FfiConverterTypeEnclaveAttestationError_lift) {
-    uniffi_bedrock_fn_method_enclaveattestationverifier_verify_attestation_document_and_encrypt(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_enclaveattestationverifier_verify_attestation_document_and_encrypt(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(attestationDocBase64),
         FfiConverterData.lower(plaintext),$0
     )
@@ -2124,13 +2130,15 @@ open func verifyAttestationDocumentAndEncrypt(attestationDocBase64: String, plai
      */
 open func verifyAttestationDocumentBase64(attestationDocBase64: String)throws  -> VerifiedAttestation  {
     return try  FfiConverterTypeVerifiedAttestation_lift(try rustCallWithError(FfiConverterTypeEnclaveAttestationError_lift) {
-    uniffi_bedrock_fn_method_enclaveattestationverifier_verify_attestation_document_base64(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_enclaveattestationverifier_verify_attestation_document_base64(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(attestationDocBase64),$0
     )
 })
 }
     
 
+    
 }
 
 
@@ -2138,33 +2146,24 @@ open func verifyAttestationDocumentBase64(attestationDocBase64: String)throws  -
 @_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeEnclaveAttestationVerifier: FfiConverter {
-
-    typealias FfiType = UnsafeMutableRawPointer
+    typealias FfiType = UInt64
     typealias SwiftType = EnclaveAttestationVerifier
 
-    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> EnclaveAttestationVerifier {
-        return EnclaveAttestationVerifier(unsafeFromRawPointer: pointer)
+    public static func lift(_ handle: UInt64) throws -> EnclaveAttestationVerifier {
+        return EnclaveAttestationVerifier(unsafeFromHandle: handle)
     }
 
-    public static func lower(_ value: EnclaveAttestationVerifier) -> UnsafeMutableRawPointer {
-        return value.uniffiClonePointer()
+    public static func lower(_ value: EnclaveAttestationVerifier) -> UInt64 {
+        return value.uniffiCloneHandle()
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> EnclaveAttestationVerifier {
-        let v: UInt64 = try readInt(&buf)
-        // The Rust code won't compile if a pointer won't fit in a UInt64.
-        // We have to go via `UInt` because that's the thing that's the size of a pointer.
-        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
-        if (ptr == nil) {
-            throw UniffiInternalError.unexpectedNullPointer
-        }
-        return try lift(ptr!)
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
     }
 
     public static func write(_ value: EnclaveAttestationVerifier, into buf: inout [UInt8]) {
-        // This fiddling is because `Int` is the thing that's the same size as a pointer.
-        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
-        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+        writeInt(&buf, lower(value))
     }
 }
 
@@ -2172,14 +2171,14 @@ public struct FfiConverterTypeEnclaveAttestationVerifier: FfiConverter {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeEnclaveAttestationVerifier_lift(_ pointer: UnsafeMutableRawPointer) throws -> EnclaveAttestationVerifier {
-    return try FfiConverterTypeEnclaveAttestationVerifier.lift(pointer)
+public func FfiConverterTypeEnclaveAttestationVerifier_lift(_ handle: UInt64) throws -> EnclaveAttestationVerifier {
+    return try FfiConverterTypeEnclaveAttestationVerifier.lift(handle)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeEnclaveAttestationVerifier_lower(_ value: EnclaveAttestationVerifier) -> UnsafeMutableRawPointer {
+public func FfiConverterTypeEnclaveAttestationVerifier_lower(_ value: EnclaveAttestationVerifier) -> UInt64 {
     return FfiConverterTypeEnclaveAttestationVerifier.lower(value)
 }
 
@@ -2255,13 +2254,13 @@ public protocol FileSystem: AnyObject, Sendable {
  * Trait representing a filesystem that can be implemented by the native side
  */
 open class FileSystemImpl: FileSystem, @unchecked Sendable {
-    fileprivate let pointer: UnsafeMutableRawPointer!
+    fileprivate let handle: UInt64
 
-    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public struct NoPointer {
+    public struct NoHandle {
         public init() {}
     }
 
@@ -2271,36 +2270,32 @@ open class FileSystemImpl: FileSystem, @unchecked Sendable {
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
-        self.pointer = pointer
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
     }
 
     // This constructor can be used to instantiate a fake object.
-    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
     //
     // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public init(noPointer: NoPointer) {
-        self.pointer = nil
+    public init(noHandle: NoHandle) {
+        self.handle = 0
     }
 
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_bedrock_fn_clone_filesystem(self.pointer, $0) }
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_filesystem(self.handle, $0) }
     }
     // No primary constructor declared for this class.
 
     deinit {
-        guard let pointer = pointer else {
-            return
-        }
-
-        try! rustCall { uniffi_bedrock_fn_free_filesystem(pointer, $0) }
+        try! rustCall { uniffi_bedrock_fn_free_filesystem(handle, $0) }
     }
 
     
@@ -2314,7 +2309,8 @@ open class FileSystemImpl: FileSystem, @unchecked Sendable {
      */
 open func fileExists(filePath: String)throws  -> Bool  {
     return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
-    uniffi_bedrock_fn_method_filesystem_file_exists(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_filesystem_file_exists(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(filePath),$0
     )
 })
@@ -2329,7 +2325,8 @@ open func fileExists(filePath: String)throws  -> Bool  {
      */
 open func readFile(filePath: String)throws  -> Data  {
     return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
-    uniffi_bedrock_fn_method_filesystem_read_file(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_filesystem_read_file(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(filePath),$0
     )
 })
@@ -2346,7 +2343,8 @@ open func readFile(filePath: String)throws  -> Data  {
      */
 open func listFilesAtDirectory(folderPath: String)throws  -> [String]  {
     return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
-    uniffi_bedrock_fn_method_filesystem_list_files_at_directory(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_filesystem_list_files_at_directory(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(folderPath),$0
     )
 })
@@ -2364,7 +2362,8 @@ open func listFilesAtDirectory(folderPath: String)throws  -> [String]  {
      */
 open func readFileRange(filePath: String, offset: UInt64, maxLength: UInt64)throws  -> Data  {
     return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
-    uniffi_bedrock_fn_method_filesystem_read_file_range(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_filesystem_read_file_range(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(filePath),
         FfiConverterUInt64.lower(offset),
         FfiConverterUInt64.lower(maxLength),$0
@@ -2379,7 +2378,8 @@ open func readFileRange(filePath: String, offset: UInt64, maxLength: UInt64)thro
      * - `FileSystemError::IoFailure` if the file cannot be written, with details about the failure
      */
 open func writeFile(filePath: String, fileBuffer: Data)throws   {try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
-    uniffi_bedrock_fn_method_filesystem_write_file(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_filesystem_write_file(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(filePath),
         FfiConverterData.lower(fileBuffer),$0
     )
@@ -2394,14 +2394,17 @@ open func writeFile(filePath: String, fileBuffer: Data)throws   {try rustCallWit
      * - `FileSystemError::IoFailure` if the file cannot be deleted
      */
 open func deleteFile(filePath: String)throws   {try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
-    uniffi_bedrock_fn_method_filesystem_delete_file(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_filesystem_delete_file(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(filePath),$0
     )
 }
 }
     
 
+    
 }
+
 
 
 // Put the implementation in a struct so we don't pollute the top-level namespace
@@ -2413,6 +2416,20 @@ fileprivate struct UniffiCallbackInterfaceFileSystem {
     // This creates 1-element array, since this seems to be the only way to construct a const
     // pointer that we can pass to the Rust code.
     static let vtable: [UniffiVTableCallbackInterfaceFileSystem] = [UniffiVTableCallbackInterfaceFileSystem(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterTypeFileSystem.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface FileSystem: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterTypeFileSystem.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface FileSystem: handle missing in uniffiClone")
+            }
+        },
         fileExists: { (
             uniffiHandle: UInt64,
             filePath: RustBuffer,
@@ -2568,12 +2585,6 @@ fileprivate struct UniffiCallbackInterfaceFileSystem {
                 writeReturn: writeReturn,
                 lowerError: FfiConverterTypeFileSystemError_lower
             )
-        },
-        uniffiFree: { (uniffiHandle: UInt64) -> () in
-            let result = try? FfiConverterTypeFileSystem.handleMap.remove(handle: uniffiHandle)
-            if result == nil {
-                print("Uniffi callback interface FileSystem: handle missing in uniffiFree")
-            }
         }
     )]
 }
@@ -2582,42 +2593,43 @@ private func uniffiCallbackInitFileSystem() {
     uniffi_bedrock_fn_init_callback_vtable_filesystem(UniffiCallbackInterfaceFileSystem.vtable)
 }
 
-
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeFileSystem: FfiConverter {
     fileprivate static let handleMap = UniffiHandleMap<FileSystem>()
 
-    typealias FfiType = UnsafeMutableRawPointer
+    typealias FfiType = UInt64
     typealias SwiftType = FileSystem
 
-    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> FileSystem {
-        return FileSystemImpl(unsafeFromRawPointer: pointer)
+    public static func lift(_ handle: UInt64) throws -> FileSystem {
+        if ((handle & 1) == 0) {
+            // Rust-generated handle, construct a new class that uses the handle to implement the
+            // interface
+            return FileSystemImpl(unsafeFromHandle: handle)
+        } else {
+            // Swift-generated handle, get the object from the handle map
+            return try handleMap.remove(handle: handle)
+        }
     }
 
-    public static func lower(_ value: FileSystem) -> UnsafeMutableRawPointer {
-        guard let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: handleMap.insert(obj: value))) else {
-            fatalError("Cast to UnsafeMutableRawPointer failed")
-        }
-        return ptr
+    public static func lower(_ value: FileSystem) -> UInt64 {
+         if let rustImpl = value as? FileSystemImpl {
+             // Rust-implemented object.  Clone the handle and return it
+            return rustImpl.uniffiCloneHandle()
+         } else {
+            // Swift object, generate a new vtable handle and return that.
+            return handleMap.insert(obj: value)
+         }
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FileSystem {
-        let v: UInt64 = try readInt(&buf)
-        // The Rust code won't compile if a pointer won't fit in a UInt64.
-        // We have to go via `UInt` because that's the thing that's the size of a pointer.
-        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
-        if (ptr == nil) {
-            throw UniffiInternalError.unexpectedNullPointer
-        }
-        return try lift(ptr!)
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
     }
 
     public static func write(_ value: FileSystem, into buf: inout [UInt8]) {
-        // This fiddling is because `Int` is the thing that's the same size as a pointer.
-        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
-        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+        writeInt(&buf, lower(value))
     }
 }
 
@@ -2625,14 +2637,14 @@ public struct FfiConverterTypeFileSystem: FfiConverter {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeFileSystem_lift(_ pointer: UnsafeMutableRawPointer) throws -> FileSystem {
-    return try FfiConverterTypeFileSystem.lift(pointer)
+public func FfiConverterTypeFileSystem_lift(_ handle: UInt64) throws -> FileSystem {
+    return try FfiConverterTypeFileSystem.lift(handle)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeFileSystem_lower(_ value: FileSystem) -> UnsafeMutableRawPointer {
+public func FfiConverterTypeFileSystem_lower(_ value: FileSystem) -> UInt64 {
     return FfiConverterTypeFileSystem.lower(value)
 }
 
@@ -2691,13 +2703,13 @@ public protocol FileSystemTesterProtocol: AnyObject, Sendable {
  * Test struct to verify filesystem middleware injection
  */
 open class FileSystemTester: FileSystemTesterProtocol, @unchecked Sendable {
-    fileprivate let pointer: UnsafeMutableRawPointer!
+    fileprivate let handle: UInt64
 
-    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public struct NoPointer {
+    public struct NoHandle {
         public init() {}
     }
 
@@ -2707,46 +2719,42 @@ open class FileSystemTester: FileSystemTesterProtocol, @unchecked Sendable {
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
-        self.pointer = pointer
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
     }
 
     // This constructor can be used to instantiate a fake object.
-    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
     //
     // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public init(noPointer: NoPointer) {
-        self.pointer = nil
+    public init(noHandle: NoHandle) {
+        self.handle = 0
     }
 
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_bedrock_fn_clone_filesystemtester(self.pointer, $0) }
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_filesystemtester(self.handle, $0) }
     }
     /**
      * Creates a new `FileSystemTester` instance
      */
 public convenience init() {
-    let pointer =
+    let handle =
         try! rustCall() {
     uniffi_bedrock_fn_constructor_filesystemtester_new($0
     )
 }
-    self.init(unsafeFromRawPointer: pointer)
+    self.init(unsafeFromHandle: handle)
 }
 
     deinit {
-        guard let pointer = pointer else {
-            return
-        }
-
-        try! rustCall { uniffi_bedrock_fn_free_filesystemtester(pointer, $0) }
+        try! rustCall { uniffi_bedrock_fn_free_filesystemtester(handle, $0) }
     }
 
     
@@ -2759,7 +2767,8 @@ public convenience init() {
      * - `FileSystemError` if filesystem operations fail
      */
 open func testDeleteFile(filename: String)throws   {try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
-    uniffi_bedrock_fn_method_filesystemtester_test_delete_file(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_filesystemtester_test_delete_file(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(filename),$0
     )
 }
@@ -2773,7 +2782,8 @@ open func testDeleteFile(filename: String)throws   {try rustCallWithError(FfiCon
      */
 open func testFileExists(filename: String)throws  -> Bool  {
     return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
-    uniffi_bedrock_fn_method_filesystemtester_test_file_exists(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_filesystemtester_test_file_exists(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(filename),$0
     )
 })
@@ -2787,7 +2797,8 @@ open func testFileExists(filename: String)throws  -> Bool  {
      */
 open func testListFilesAtDirectory()throws  -> [String]  {
     return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
-    uniffi_bedrock_fn_method_filesystemtester_test_list_files_at_directory(self.uniffiClonePointer(),$0
+    uniffi_bedrock_fn_method_filesystemtester_test_list_files_at_directory(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
@@ -2800,7 +2811,8 @@ open func testListFilesAtDirectory()throws  -> [String]  {
      */
 open func testReadFile(filename: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeFileSystemTestError_lift) {
-    uniffi_bedrock_fn_method_filesystemtester_test_read_file(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_filesystemtester_test_read_file(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(filename),$0
     )
 })
@@ -2813,7 +2825,8 @@ open func testReadFile(filename: String)throws  -> String  {
      * - `FileSystemTestError` if filesystem operations fail
      */
 open func testWriteFile(filename: String, content: String)throws   {try rustCallWithError(FfiConverterTypeFileSystemTestError_lift) {
-    uniffi_bedrock_fn_method_filesystemtester_test_write_file(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_filesystemtester_test_write_file(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(filename),
         FfiConverterString.lower(content),$0
     )
@@ -2821,6 +2834,7 @@ open func testWriteFile(filename: String, content: String)throws   {try rustCall
 }
     
 
+    
 }
 
 
@@ -2828,33 +2842,24 @@ open func testWriteFile(filename: String, content: String)throws   {try rustCall
 @_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeFileSystemTester: FfiConverter {
-
-    typealias FfiType = UnsafeMutableRawPointer
+    typealias FfiType = UInt64
     typealias SwiftType = FileSystemTester
 
-    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> FileSystemTester {
-        return FileSystemTester(unsafeFromRawPointer: pointer)
+    public static func lift(_ handle: UInt64) throws -> FileSystemTester {
+        return FileSystemTester(unsafeFromHandle: handle)
     }
 
-    public static func lower(_ value: FileSystemTester) -> UnsafeMutableRawPointer {
-        return value.uniffiClonePointer()
+    public static func lower(_ value: FileSystemTester) -> UInt64 {
+        return value.uniffiCloneHandle()
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FileSystemTester {
-        let v: UInt64 = try readInt(&buf)
-        // The Rust code won't compile if a pointer won't fit in a UInt64.
-        // We have to go via `UInt` because that's the thing that's the size of a pointer.
-        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
-        if (ptr == nil) {
-            throw UniffiInternalError.unexpectedNullPointer
-        }
-        return try lift(ptr!)
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
     }
 
     public static func write(_ value: FileSystemTester, into buf: inout [UInt8]) {
-        // This fiddling is because `Int` is the thing that's the same size as a pointer.
-        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
-        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+        writeInt(&buf, lower(value))
     }
 }
 
@@ -2862,14 +2867,14 @@ public struct FfiConverterTypeFileSystemTester: FfiConverter {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeFileSystemTester_lift(_ pointer: UnsafeMutableRawPointer) throws -> FileSystemTester {
-    return try FfiConverterTypeFileSystemTester.lift(pointer)
+public func FfiConverterTypeFileSystemTester_lift(_ handle: UInt64) throws -> FileSystemTester {
+    return try FfiConverterTypeFileSystemTester.lift(handle)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeFileSystemTester_lower(_ value: FileSystemTester) -> UnsafeMutableRawPointer {
+public func FfiConverterTypeFileSystemTester_lower(_ value: FileSystemTester) -> UInt64 {
     return FfiConverterTypeFileSystemTester.lower(value)
 }
 
@@ -2920,13 +2925,13 @@ public protocol HexEncodedDataProtocol: AnyObject, Sendable {
  * ```
  */
 open class HexEncodedData: HexEncodedDataProtocol, @unchecked Sendable {
-    fileprivate let pointer: UnsafeMutableRawPointer!
+    fileprivate let handle: UInt64
 
-    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public struct NoPointer {
+    public struct NoHandle {
         public init() {}
     }
 
@@ -2936,27 +2941,27 @@ open class HexEncodedData: HexEncodedDataProtocol, @unchecked Sendable {
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
-        self.pointer = pointer
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
     }
 
     // This constructor can be used to instantiate a fake object.
-    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
     //
     // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public init(noPointer: NoPointer) {
-        self.pointer = nil
+    public init(noHandle: NoHandle) {
+        self.handle = 0
     }
 
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_bedrock_fn_clone_hexencodeddata(self.pointer, $0) }
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_hexencodeddata(self.handle, $0) }
     }
     /**
      * Initializes a new `HexEncodedData` from a hex string.
@@ -2968,21 +2973,17 @@ open class HexEncodedData: HexEncodedDataProtocol, @unchecked Sendable {
      * - `PrimitiveError::InvalidHexString` if the provided string is not validly encoded hex data.
      */
 public convenience init(s: String)throws  {
-    let pointer =
+    let handle =
         try rustCallWithError(FfiConverterTypePrimitiveError_lift) {
     uniffi_bedrock_fn_constructor_hexencodeddata_new(
         FfiConverterString.lower(s),$0
     )
 }
-    self.init(unsafeFromRawPointer: pointer)
+    self.init(unsafeFromHandle: handle)
 }
 
     deinit {
-        guard let pointer = pointer else {
-            return
-        }
-
-        try! rustCall { uniffi_bedrock_fn_free_hexencodeddata(pointer, $0) }
+        try! rustCall { uniffi_bedrock_fn_free_hexencodeddata(handle, $0) }
     }
 
     
@@ -2993,7 +2994,8 @@ public convenience init(s: String)throws  {
      */
 open func toHexString() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
-    uniffi_bedrock_fn_method_hexencodeddata_to_hex_string(self.uniffiClonePointer(),$0
+    uniffi_bedrock_fn_method_hexencodeddata_to_hex_string(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
@@ -3007,12 +3009,14 @@ open func toHexString() -> String  {
      */
 open func toVec()throws  -> Data  {
     return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypePrimitiveError_lift) {
-    uniffi_bedrock_fn_method_hexencodeddata_to_vec(self.uniffiClonePointer(),$0
+    uniffi_bedrock_fn_method_hexencodeddata_to_vec(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
 
+    
 }
 
 
@@ -3020,33 +3024,24 @@ open func toVec()throws  -> Data  {
 @_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeHexEncodedData: FfiConverter {
-
-    typealias FfiType = UnsafeMutableRawPointer
+    typealias FfiType = UInt64
     typealias SwiftType = HexEncodedData
 
-    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> HexEncodedData {
-        return HexEncodedData(unsafeFromRawPointer: pointer)
+    public static func lift(_ handle: UInt64) throws -> HexEncodedData {
+        return HexEncodedData(unsafeFromHandle: handle)
     }
 
-    public static func lower(_ value: HexEncodedData) -> UnsafeMutableRawPointer {
-        return value.uniffiClonePointer()
+    public static func lower(_ value: HexEncodedData) -> UInt64 {
+        return value.uniffiCloneHandle()
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> HexEncodedData {
-        let v: UInt64 = try readInt(&buf)
-        // The Rust code won't compile if a pointer won't fit in a UInt64.
-        // We have to go via `UInt` because that's the thing that's the size of a pointer.
-        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
-        if (ptr == nil) {
-            throw UniffiInternalError.unexpectedNullPointer
-        }
-        return try lift(ptr!)
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
     }
 
     public static func write(_ value: HexEncodedData, into buf: inout [UInt8]) {
-        // This fiddling is because `Int` is the thing that's the same size as a pointer.
-        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
-        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+        writeInt(&buf, lower(value))
     }
 }
 
@@ -3054,14 +3049,14 @@ public struct FfiConverterTypeHexEncodedData: FfiConverter {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeHexEncodedData_lift(_ pointer: UnsafeMutableRawPointer) throws -> HexEncodedData {
-    return try FfiConverterTypeHexEncodedData.lift(pointer)
+public func FfiConverterTypeHexEncodedData_lift(_ handle: UInt64) throws -> HexEncodedData {
+    return try FfiConverterTypeHexEncodedData.lift(handle)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeHexEncodedData_lower(_ value: HexEncodedData) -> UnsafeMutableRawPointer {
+public func FfiConverterTypeHexEncodedData_lower(_ value: HexEncodedData) -> UInt64 {
     return FfiConverterTypeHexEncodedData.lower(value)
 }
 
@@ -3094,13 +3089,13 @@ public protocol HttpClientTesterProtocol: AnyObject, Sendable {
  * Test struct to verify HTTP client integration from foreign bindings.
  */
 open class HttpClientTester: HttpClientTesterProtocol, @unchecked Sendable {
-    fileprivate let pointer: UnsafeMutableRawPointer!
+    fileprivate let handle: UInt64
 
-    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public struct NoPointer {
+    public struct NoHandle {
         public init() {}
     }
 
@@ -3110,46 +3105,42 @@ open class HttpClientTester: HttpClientTesterProtocol, @unchecked Sendable {
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
-        self.pointer = pointer
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
     }
 
     // This constructor can be used to instantiate a fake object.
-    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
     //
     // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public init(noPointer: NoPointer) {
-        self.pointer = nil
+    public init(noHandle: NoHandle) {
+        self.handle = 0
     }
 
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_bedrock_fn_clone_httpclienttester(self.pointer, $0) }
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_httpclienttester(self.handle, $0) }
     }
     /**
      * Creates a new `HttpClientTester` instance.
      */
 public convenience init() {
-    let pointer =
+    let handle =
         try! rustCall() {
     uniffi_bedrock_fn_constructor_httpclienttester_new($0
     )
 }
-    self.init(unsafeFromRawPointer: pointer)
+    self.init(unsafeFromHandle: handle)
 }
 
     deinit {
-        guard let pointer = pointer else {
-            return
-        }
-
-        try! rustCall { uniffi_bedrock_fn_free_httpclienttester(pointer, $0) }
+        try! rustCall { uniffi_bedrock_fn_free_httpclienttester(handle, $0) }
     }
 
     
@@ -3172,7 +3163,7 @@ open func fetchBadStatusCode(url: String, method: HttpMethod, headers: [HttpHead
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_httpclienttester_fetch_bad_status_code(
-                    self.uniffiClonePointer(),
+                    self.uniffiCloneHandle(),
                     FfiConverterString.lower(url),FfiConverterTypeHttpMethod_lower(method),FfiConverterSequenceTypeHttpHeader.lower(headers),FfiConverterOptionData.lower(body)
                 )
             },
@@ -3185,6 +3176,7 @@ open func fetchBadStatusCode(url: String, method: HttpMethod, headers: [HttpHead
 }
     
 
+    
 }
 
 
@@ -3192,33 +3184,24 @@ open func fetchBadStatusCode(url: String, method: HttpMethod, headers: [HttpHead
 @_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeHttpClientTester: FfiConverter {
-
-    typealias FfiType = UnsafeMutableRawPointer
+    typealias FfiType = UInt64
     typealias SwiftType = HttpClientTester
 
-    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> HttpClientTester {
-        return HttpClientTester(unsafeFromRawPointer: pointer)
+    public static func lift(_ handle: UInt64) throws -> HttpClientTester {
+        return HttpClientTester(unsafeFromHandle: handle)
     }
 
-    public static func lower(_ value: HttpClientTester) -> UnsafeMutableRawPointer {
-        return value.uniffiClonePointer()
+    public static func lower(_ value: HttpClientTester) -> UInt64 {
+        return value.uniffiCloneHandle()
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> HttpClientTester {
-        let v: UInt64 = try readInt(&buf)
-        // The Rust code won't compile if a pointer won't fit in a UInt64.
-        // We have to go via `UInt` because that's the thing that's the size of a pointer.
-        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
-        if (ptr == nil) {
-            throw UniffiInternalError.unexpectedNullPointer
-        }
-        return try lift(ptr!)
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
     }
 
     public static func write(_ value: HttpClientTester, into buf: inout [UInt8]) {
-        // This fiddling is because `Int` is the thing that's the same size as a pointer.
-        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
-        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+        writeInt(&buf, lower(value))
     }
 }
 
@@ -3226,14 +3209,14 @@ public struct FfiConverterTypeHttpClientTester: FfiConverter {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeHttpClientTester_lift(_ pointer: UnsafeMutableRawPointer) throws -> HttpClientTester {
-    return try FfiConverterTypeHttpClientTester.lift(pointer)
+public func FfiConverterTypeHttpClientTester_lift(_ handle: UInt64) throws -> HttpClientTester {
+    return try FfiConverterTypeHttpClientTester.lift(handle)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeHttpClientTester_lower(_ value: HttpClientTester) -> UnsafeMutableRawPointer {
+public func FfiConverterTypeHttpClientTester_lower(_ value: HttpClientTester) -> UInt64 {
     return FfiConverterTypeHttpClientTester.lower(value)
 }
 
@@ -3376,13 +3359,13 @@ public protocol Logger: AnyObject, Sendable {
  * ```
  */
 open class LoggerImpl: Logger, @unchecked Sendable {
-    fileprivate let pointer: UnsafeMutableRawPointer!
+    fileprivate let handle: UInt64
 
-    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public struct NoPointer {
+    public struct NoHandle {
         public init() {}
     }
 
@@ -3392,36 +3375,32 @@ open class LoggerImpl: Logger, @unchecked Sendable {
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
-        self.pointer = pointer
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
     }
 
     // This constructor can be used to instantiate a fake object.
-    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
     //
     // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public init(noPointer: NoPointer) {
-        self.pointer = nil
+    public init(noHandle: NoHandle) {
+        self.handle = 0
     }
 
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_bedrock_fn_clone_logger(self.pointer, $0) }
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_logger(self.handle, $0) }
     }
     // No primary constructor declared for this class.
 
     deinit {
-        guard let pointer = pointer else {
-            return
-        }
-
-        try! rustCall { uniffi_bedrock_fn_free_logger(pointer, $0) }
+        try! rustCall { uniffi_bedrock_fn_free_logger(handle, $0) }
     }
 
     
@@ -3436,7 +3415,8 @@ open class LoggerImpl: Logger, @unchecked Sendable {
      * * `message` - The log message to be recorded.
      */
 open func log(level: LogLevel, message: String)  {try! rustCall() {
-    uniffi_bedrock_fn_method_logger_log(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_logger_log(
+            self.uniffiCloneHandle(),
         FfiConverterTypeLogLevel_lower(level),
         FfiConverterString.lower(message),$0
     )
@@ -3444,7 +3424,9 @@ open func log(level: LogLevel, message: String)  {try! rustCall() {
 }
     
 
+    
 }
+
 
 
 // Put the implementation in a struct so we don't pollute the top-level namespace
@@ -3456,6 +3438,20 @@ fileprivate struct UniffiCallbackInterfaceLogger {
     // This creates 1-element array, since this seems to be the only way to construct a const
     // pointer that we can pass to the Rust code.
     static let vtable: [UniffiVTableCallbackInterfaceLogger] = [UniffiVTableCallbackInterfaceLogger(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterTypeLogger.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface Logger: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterTypeLogger.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface Logger: handle missing in uniffiClone")
+            }
+        },
         log: { (
             uniffiHandle: UInt64,
             level: RustBuffer,
@@ -3481,12 +3477,6 @@ fileprivate struct UniffiCallbackInterfaceLogger {
                 makeCall: makeCall,
                 writeReturn: writeReturn
             )
-        },
-        uniffiFree: { (uniffiHandle: UInt64) -> () in
-            let result = try? FfiConverterTypeLogger.handleMap.remove(handle: uniffiHandle)
-            if result == nil {
-                print("Uniffi callback interface Logger: handle missing in uniffiFree")
-            }
         }
     )]
 }
@@ -3495,42 +3485,43 @@ private func uniffiCallbackInitLogger() {
     uniffi_bedrock_fn_init_callback_vtable_logger(UniffiCallbackInterfaceLogger.vtable)
 }
 
-
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeLogger: FfiConverter {
     fileprivate static let handleMap = UniffiHandleMap<Logger>()
 
-    typealias FfiType = UnsafeMutableRawPointer
+    typealias FfiType = UInt64
     typealias SwiftType = Logger
 
-    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> Logger {
-        return LoggerImpl(unsafeFromRawPointer: pointer)
+    public static func lift(_ handle: UInt64) throws -> Logger {
+        if ((handle & 1) == 0) {
+            // Rust-generated handle, construct a new class that uses the handle to implement the
+            // interface
+            return LoggerImpl(unsafeFromHandle: handle)
+        } else {
+            // Swift-generated handle, get the object from the handle map
+            return try handleMap.remove(handle: handle)
+        }
     }
 
-    public static func lower(_ value: Logger) -> UnsafeMutableRawPointer {
-        guard let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: handleMap.insert(obj: value))) else {
-            fatalError("Cast to UnsafeMutableRawPointer failed")
-        }
-        return ptr
+    public static func lower(_ value: Logger) -> UInt64 {
+         if let rustImpl = value as? LoggerImpl {
+             // Rust-implemented object.  Clone the handle and return it
+            return rustImpl.uniffiCloneHandle()
+         } else {
+            // Swift object, generate a new vtable handle and return that.
+            return handleMap.insert(obj: value)
+         }
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Logger {
-        let v: UInt64 = try readInt(&buf)
-        // The Rust code won't compile if a pointer won't fit in a UInt64.
-        // We have to go via `UInt` because that's the thing that's the size of a pointer.
-        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
-        if (ptr == nil) {
-            throw UniffiInternalError.unexpectedNullPointer
-        }
-        return try lift(ptr!)
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
     }
 
     public static func write(_ value: Logger, into buf: inout [UInt8]) {
-        // This fiddling is because `Int` is the thing that's the same size as a pointer.
-        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
-        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+        writeInt(&buf, lower(value))
     }
 }
 
@@ -3538,14 +3529,14 @@ public struct FfiConverterTypeLogger: FfiConverter {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeLogger_lift(_ pointer: UnsafeMutableRawPointer) throws -> Logger {
-    return try FfiConverterTypeLogger.lift(pointer)
+public func FfiConverterTypeLogger_lift(_ handle: UInt64) throws -> Logger {
+    return try FfiConverterTypeLogger.lift(handle)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeLogger_lower(_ value: Logger) -> UnsafeMutableRawPointer {
+public func FfiConverterTypeLogger_lower(_ value: Logger) -> UInt64 {
     return FfiConverterTypeLogger.lower(value)
 }
 
@@ -3606,13 +3597,13 @@ public protocol ManifestManagerProtocol: AnyObject, Sendable {
  * Documentation: <https://docs.toolsforhumanity.com/world-app/backup/structure-and-sync>
  */
 open class ManifestManager: ManifestManagerProtocol, @unchecked Sendable {
-    fileprivate let pointer: UnsafeMutableRawPointer!
+    fileprivate let handle: UInt64
 
-    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public struct NoPointer {
+    public struct NoHandle {
         public init() {}
     }
 
@@ -3622,46 +3613,42 @@ open class ManifestManager: ManifestManagerProtocol, @unchecked Sendable {
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
-        self.pointer = pointer
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
     }
 
     // This constructor can be used to instantiate a fake object.
-    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
     //
     // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public init(noPointer: NoPointer) {
-        self.pointer = nil
+    public init(noHandle: NoHandle) {
+        self.handle = 0
     }
 
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_bedrock_fn_clone_manifestmanager(self.pointer, $0) }
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_manifestmanager(self.handle, $0) }
     }
     /**
      * Constructs a new `ManifestManager` instance with a file system middleware scoped to backups.
      */
 public convenience init() {
-    let pointer =
+    let handle =
         try! rustCall() {
     uniffi_bedrock_fn_constructor_manifestmanager_new($0
     )
 }
-    self.init(unsafeFromRawPointer: pointer)
+    self.init(unsafeFromHandle: handle)
 }
 
     deinit {
-        guard let pointer = pointer else {
-            return
-        }
-
-        try! rustCall { uniffi_bedrock_fn_free_manifestmanager(pointer, $0) }
+        try! rustCall { uniffi_bedrock_fn_free_manifestmanager(handle, $0) }
     }
 
     
@@ -3680,7 +3667,7 @@ open func listFiles(designator: BackupFileDesignator)async throws  -> [String]  
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_manifestmanager_list_files(
-                    self.uniffiClonePointer(),
+                    self.uniffiCloneHandle(),
                     FfiConverterTypeBackupFileDesignator_lower(designator)
                 )
             },
@@ -3705,7 +3692,7 @@ open func removeFile(filePath: String, rootSecret: String, backupKeypairPublicKe
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_manifestmanager_remove_file(
-                    self.uniffiClonePointer(),
+                    self.uniffiCloneHandle(),
                     FfiConverterString.lower(filePath),FfiConverterString.lower(rootSecret),FfiConverterString.lower(backupKeypairPublicKey)
                 )
             },
@@ -3729,7 +3716,7 @@ open func replaceAllFilesForDesignator(designator: BackupFileDesignator, newFile
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_manifestmanager_replace_all_files_for_designator(
-                    self.uniffiClonePointer(),
+                    self.uniffiCloneHandle(),
                     FfiConverterTypeBackupFileDesignator_lower(designator),FfiConverterString.lower(newFilePath),FfiConverterString.lower(rootSecret),FfiConverterString.lower(backupKeypairPublicKey)
                 )
             },
@@ -3753,7 +3740,7 @@ open func storeFile(designator: BackupFileDesignator, filePath: String, rootSecr
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_manifestmanager_store_file(
-                    self.uniffiClonePointer(),
+                    self.uniffiCloneHandle(),
                     FfiConverterTypeBackupFileDesignator_lower(designator),FfiConverterString.lower(filePath),FfiConverterString.lower(rootSecret),FfiConverterString.lower(backupKeypairPublicKey)
                 )
             },
@@ -3766,6 +3753,7 @@ open func storeFile(designator: BackupFileDesignator, filePath: String, rootSecr
 }
     
 
+    
 }
 
 
@@ -3773,33 +3761,24 @@ open func storeFile(designator: BackupFileDesignator, filePath: String, rootSecr
 @_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeManifestManager: FfiConverter {
-
-    typealias FfiType = UnsafeMutableRawPointer
+    typealias FfiType = UInt64
     typealias SwiftType = ManifestManager
 
-    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> ManifestManager {
-        return ManifestManager(unsafeFromRawPointer: pointer)
+    public static func lift(_ handle: UInt64) throws -> ManifestManager {
+        return ManifestManager(unsafeFromHandle: handle)
     }
 
-    public static func lower(_ value: ManifestManager) -> UnsafeMutableRawPointer {
-        return value.uniffiClonePointer()
+    public static func lower(_ value: ManifestManager) -> UInt64 {
+        return value.uniffiCloneHandle()
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ManifestManager {
-        let v: UInt64 = try readInt(&buf)
-        // The Rust code won't compile if a pointer won't fit in a UInt64.
-        // We have to go via `UInt` because that's the thing that's the size of a pointer.
-        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
-        if (ptr == nil) {
-            throw UniffiInternalError.unexpectedNullPointer
-        }
-        return try lift(ptr!)
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
     }
 
     public static func write(_ value: ManifestManager, into buf: inout [UInt8]) {
-        // This fiddling is because `Int` is the thing that's the same size as a pointer.
-        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
-        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+        writeInt(&buf, lower(value))
     }
 }
 
@@ -3807,14 +3786,14 @@ public struct FfiConverterTypeManifestManager: FfiConverter {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeManifestManager_lift(_ pointer: UnsafeMutableRawPointer) throws -> ManifestManager {
-    return try FfiConverterTypeManifestManager.lift(pointer)
+public func FfiConverterTypeManifestManager_lift(_ handle: UInt64) throws -> ManifestManager {
+    return try FfiConverterTypeManifestManager.lift(handle)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeManifestManager_lower(_ value: ManifestManager) -> UnsafeMutableRawPointer {
+public func FfiConverterTypeManifestManager_lower(_ value: ManifestManager) -> UInt64 {
     return FfiConverterTypeManifestManager.lower(value)
 }
 
@@ -3829,6 +3808,22 @@ public func FfiConverterTypeManifestManager_lower(_ value: ManifestManager) -> U
  * Debug trait is safe because the key is stored in a `SecretBox`.
  */
 public protocol RootKeyProtocol: AnyObject, Sendable {
+    
+    /**
+     * Key derivation. "Public" value.
+     *
+     * Derives the deterministic public backup account ID to uniquely identify a backup for an account.
+     *
+     * This is used to ensure that only a single backup can exist per account, otherwise this could lead
+     * to race conditions and undefined behavior with the backup (including user confusion).
+     *
+     * The public backup account ID is the public key of a `secp256k1` key. Public key cryptography is introduced
+     * so the user can prove ownership of the backup account ID for certain disaster recovery scenarios.
+     *
+     * # Errors
+     * No errors are generally expected, but key derivation may unexpectedly fail.
+     */
+    func derivePublicBackupAccountId() throws  -> String
     
     /**
      * Returns `true` if the provided `RootKey`s are equal by comparing internally the underlying secrets.
@@ -3847,13 +3842,13 @@ public protocol RootKeyProtocol: AnyObject, Sendable {
  * Debug trait is safe because the key is stored in a `SecretBox`.
  */
 open class RootKey: RootKeyProtocol, @unchecked Sendable {
-    fileprivate let pointer: UnsafeMutableRawPointer!
+    fileprivate let handle: UInt64
 
-    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public struct NoPointer {
+    public struct NoHandle {
         public init() {}
     }
 
@@ -3863,36 +3858,32 @@ open class RootKey: RootKeyProtocol, @unchecked Sendable {
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
-        self.pointer = pointer
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
     }
 
     // This constructor can be used to instantiate a fake object.
-    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
     //
     // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public init(noPointer: NoPointer) {
-        self.pointer = nil
+    public init(noHandle: NoHandle) {
+        self.handle = 0
     }
 
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_bedrock_fn_clone_rootkey(self.pointer, $0) }
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_rootkey(self.handle, $0) }
     }
     // No primary constructor declared for this class.
 
     deinit {
-        guard let pointer = pointer else {
-            return
-        }
-
-        try! rustCall { uniffi_bedrock_fn_free_rootkey(pointer, $0) }
+        try! rustCall { uniffi_bedrock_fn_free_rootkey(handle, $0) }
     }
 
     
@@ -3923,11 +3914,34 @@ public static func newRandom() -> RootKey  {
 
     
     /**
+     * Key derivation. "Public" value.
+     *
+     * Derives the deterministic public backup account ID to uniquely identify a backup for an account.
+     *
+     * This is used to ensure that only a single backup can exist per account, otherwise this could lead
+     * to race conditions and undefined behavior with the backup (including user confusion).
+     *
+     * The public backup account ID is the public key of a `secp256k1` key. Public key cryptography is introduced
+     * so the user can prove ownership of the backup account ID for certain disaster recovery scenarios.
+     *
+     * # Errors
+     * No errors are generally expected, but key derivation may unexpectedly fail.
+     */
+open func derivePublicBackupAccountId()throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeRootKeyError_lift) {
+    uniffi_bedrock_fn_method_rootkey_derive_public_backup_account_id(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+    /**
      * Returns `true` if the provided `RootKey`s are equal by comparing internally the underlying secrets.
      */
 open func isEqualTo(other: RootKey) -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_bedrock_fn_method_rootkey_is_equal_to(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_rootkey_is_equal_to(
+            self.uniffiCloneHandle(),
         FfiConverterTypeRootKey_lower(other),$0
     )
 })
@@ -3938,12 +3952,14 @@ open func isEqualTo(other: RootKey) -> Bool  {
      */
 open func isV0() -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_bedrock_fn_method_rootkey_is_v0(self.uniffiClonePointer(),$0
+    uniffi_bedrock_fn_method_rootkey_is_v0(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
 
+    
 }
 
 
@@ -3951,33 +3967,24 @@ open func isV0() -> Bool  {
 @_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeRootKey: FfiConverter {
-
-    typealias FfiType = UnsafeMutableRawPointer
+    typealias FfiType = UInt64
     typealias SwiftType = RootKey
 
-    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> RootKey {
-        return RootKey(unsafeFromRawPointer: pointer)
+    public static func lift(_ handle: UInt64) throws -> RootKey {
+        return RootKey(unsafeFromHandle: handle)
     }
 
-    public static func lower(_ value: RootKey) -> UnsafeMutableRawPointer {
-        return value.uniffiClonePointer()
+    public static func lower(_ value: RootKey) -> UInt64 {
+        return value.uniffiCloneHandle()
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RootKey {
-        let v: UInt64 = try readInt(&buf)
-        // The Rust code won't compile if a pointer won't fit in a UInt64.
-        // We have to go via `UInt` because that's the thing that's the size of a pointer.
-        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
-        if (ptr == nil) {
-            throw UniffiInternalError.unexpectedNullPointer
-        }
-        return try lift(ptr!)
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
     }
 
     public static func write(_ value: RootKey, into buf: inout [UInt8]) {
-        // This fiddling is because `Int` is the thing that's the same size as a pointer.
-        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
-        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+        writeInt(&buf, lower(value))
     }
 }
 
@@ -3985,14 +3992,14 @@ public struct FfiConverterTypeRootKey: FfiConverter {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeRootKey_lift(_ pointer: UnsafeMutableRawPointer) throws -> RootKey {
-    return try FfiConverterTypeRootKey.lift(pointer)
+public func FfiConverterTypeRootKey_lift(_ handle: UInt64) throws -> RootKey {
+    return try FfiConverterTypeRootKey.lift(handle)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeRootKey_lower(_ value: RootKey) -> UnsafeMutableRawPointer {
+public func FfiConverterTypeRootKey_lower(_ value: RootKey) -> UInt64 {
     return FfiConverterTypeRootKey.lower(value)
 }
 
@@ -4169,13 +4176,13 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
  * Reference: <https://github.com/safe-global/safe-smart-account>
  */
 open class SafeSmartAccount: SafeSmartAccountProtocol, @unchecked Sendable {
-    fileprivate let pointer: UnsafeMutableRawPointer!
+    fileprivate let handle: UInt64
 
-    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public struct NoPointer {
+    public struct NoHandle {
         public init() {}
     }
 
@@ -4185,27 +4192,27 @@ open class SafeSmartAccount: SafeSmartAccountProtocol, @unchecked Sendable {
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
-        self.pointer = pointer
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
     }
 
     // This constructor can be used to instantiate a fake object.
-    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
     //
     // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public init(noPointer: NoPointer) {
-        self.pointer = nil
+    public init(noHandle: NoHandle) {
+        self.handle = 0
     }
 
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_bedrock_fn_clone_safesmartaccount(self.pointer, $0) }
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_safesmartaccount(self.handle, $0) }
     }
     /**
      * Initializes a new `SafeSmartAccount` instance with the given EOA signing key.
@@ -4222,22 +4229,18 @@ open class SafeSmartAccount: SafeSmartAccountProtocol, @unchecked Sendable {
      * - Will return an error if the key is not a valid point in the k256 curve.
      */
 public convenience init(privateKey: String, walletAddress: String)throws  {
-    let pointer =
+    let handle =
         try rustCallWithError(FfiConverterTypeSafeSmartAccountError_lift) {
     uniffi_bedrock_fn_constructor_safesmartaccount_new(
         FfiConverterString.lower(privateKey),
         FfiConverterString.lower(walletAddress),$0
     )
 }
-    self.init(unsafeFromRawPointer: pointer)
+    self.init(unsafeFromHandle: handle)
 }
 
     deinit {
-        guard let pointer = pointer else {
-            return
-        }
-
-        try! rustCall { uniffi_bedrock_fn_free_safesmartaccount(pointer, $0) }
+        try! rustCall { uniffi_bedrock_fn_free_safesmartaccount(handle, $0) }
     }
 
     
@@ -4256,7 +4259,8 @@ public convenience init(privateKey: String, walletAddress: String)throws  {
      */
 open func personalSign(chainId: UInt32, message: String)throws  -> HexEncodedData  {
     return try  FfiConverterTypeHexEncodedData_lift(try rustCallWithError(FfiConverterTypeSafeSmartAccountError_lift) {
-    uniffi_bedrock_fn_method_safesmartaccount_personal_sign(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_safesmartaccount_personal_sign(
+            self.uniffiCloneHandle(),
         FfiConverterUInt32.lower(chainId),
         FfiConverterString.lower(message),$0
     )
@@ -4313,7 +4317,8 @@ open func personalSign(chainId: UInt32, message: String)throws  -> HexEncodedDat
      */
 open func sign4337Op(chainId: UInt32, userOperation: UnparsedUserOperation)throws  -> HexEncodedData  {
     return try  FfiConverterTypeHexEncodedData_lift(try rustCallWithError(FfiConverterTypeSafeSmartAccountError_lift) {
-    uniffi_bedrock_fn_method_safesmartaccount_sign_4337_op(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_safesmartaccount_sign_4337_op(
+            self.uniffiCloneHandle(),
         FfiConverterUInt32.lower(chainId),
         FfiConverterTypeUnparsedUserOperation_lower(userOperation),$0
     )
@@ -4335,7 +4340,8 @@ open func sign4337Op(chainId: UInt32, userOperation: UnparsedUserOperation)throw
      */
 open func signPermit2Transfer(chainId: UInt32, transfer: UnparsedPermitTransferFrom)throws  -> HexEncodedData  {
     return try  FfiConverterTypeHexEncodedData_lift(try rustCallWithError(FfiConverterTypeSafeSmartAccountError_lift) {
-    uniffi_bedrock_fn_method_safesmartaccount_sign_permit2_transfer(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_safesmartaccount_sign_permit2_transfer(
+            self.uniffiCloneHandle(),
         FfiConverterUInt32.lower(chainId),
         FfiConverterTypeUnparsedPermitTransferFrom_lower(transfer),$0
     )
@@ -4357,7 +4363,8 @@ open func signPermit2Transfer(chainId: UInt32, transfer: UnparsedPermitTransferF
      */
 open func signTransaction(chainId: UInt32, transaction: SafeTransaction)throws  -> HexEncodedData  {
     return try  FfiConverterTypeHexEncodedData_lift(try rustCallWithError(FfiConverterTypeSafeSmartAccountError_lift) {
-    uniffi_bedrock_fn_method_safesmartaccount_sign_transaction(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_safesmartaccount_sign_transaction(
+            self.uniffiCloneHandle(),
         FfiConverterUInt32.lower(chainId),
         FfiConverterTypeSafeTransaction_lower(transaction),$0
     )
@@ -4381,7 +4388,8 @@ open func signTransaction(chainId: UInt32, transaction: SafeTransaction)throws  
      */
 open func signTypedData(chainId: UInt32, stringifiedTypedData: String)throws  -> HexEncodedData  {
     return try  FfiConverterTypeHexEncodedData_lift(try rustCallWithError(FfiConverterTypeSafeSmartAccountError_lift) {
-    uniffi_bedrock_fn_method_safesmartaccount_sign_typed_data(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_safesmartaccount_sign_typed_data(
+            self.uniffiCloneHandle(),
         FfiConverterUInt32.lower(chainId),
         FfiConverterString.lower(stringifiedTypedData),$0
     )
@@ -4431,19 +4439,20 @@ open func transactionTransfer(tokenAddress: String, toAddress: String, amount: S
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_safesmartaccount_transaction_transfer(
-                    self.uniffiClonePointer(),
+                    self.uniffiCloneHandle(),
                     FfiConverterString.lower(tokenAddress),FfiConverterString.lower(toAddress),FfiConverterString.lower(amount),FfiConverterOptionTypeTransferAssociation.lower(transferAssociation)
                 )
             },
-            pollFunc: ffi_bedrock_rust_future_poll_pointer,
-            completeFunc: ffi_bedrock_rust_future_complete_pointer,
-            freeFunc: ffi_bedrock_rust_future_free_pointer,
+            pollFunc: ffi_bedrock_rust_future_poll_u64,
+            completeFunc: ffi_bedrock_rust_future_complete_u64,
+            freeFunc: ffi_bedrock_rust_future_free_u64,
             liftFunc: FfiConverterTypeHexEncodedData_lift,
             errorHandler: FfiConverterTypeTransactionError_lift
         )
 }
     
 
+    
 }
 
 
@@ -4451,33 +4460,24 @@ open func transactionTransfer(tokenAddress: String, toAddress: String, amount: S
 @_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeSafeSmartAccount: FfiConverter {
-
-    typealias FfiType = UnsafeMutableRawPointer
+    typealias FfiType = UInt64
     typealias SwiftType = SafeSmartAccount
 
-    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> SafeSmartAccount {
-        return SafeSmartAccount(unsafeFromRawPointer: pointer)
+    public static func lift(_ handle: UInt64) throws -> SafeSmartAccount {
+        return SafeSmartAccount(unsafeFromHandle: handle)
     }
 
-    public static func lower(_ value: SafeSmartAccount) -> UnsafeMutableRawPointer {
-        return value.uniffiClonePointer()
+    public static func lower(_ value: SafeSmartAccount) -> UInt64 {
+        return value.uniffiCloneHandle()
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SafeSmartAccount {
-        let v: UInt64 = try readInt(&buf)
-        // The Rust code won't compile if a pointer won't fit in a UInt64.
-        // We have to go via `UInt` because that's the thing that's the size of a pointer.
-        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
-        if (ptr == nil) {
-            throw UniffiInternalError.unexpectedNullPointer
-        }
-        return try lift(ptr!)
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
     }
 
     public static func write(_ value: SafeSmartAccount, into buf: inout [UInt8]) {
-        // This fiddling is because `Int` is the thing that's the same size as a pointer.
-        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
-        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+        writeInt(&buf, lower(value))
     }
 }
 
@@ -4485,14 +4485,14 @@ public struct FfiConverterTypeSafeSmartAccount: FfiConverter {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeSafeSmartAccount_lift(_ pointer: UnsafeMutableRawPointer) throws -> SafeSmartAccount {
-    return try FfiConverterTypeSafeSmartAccount.lift(pointer)
+public func FfiConverterTypeSafeSmartAccount_lift(_ handle: UInt64) throws -> SafeSmartAccount {
+    return try FfiConverterTypeSafeSmartAccount.lift(handle)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeSafeSmartAccount_lower(_ value: SafeSmartAccount) -> UnsafeMutableRawPointer {
+public func FfiConverterTypeSafeSmartAccount_lower(_ value: SafeSmartAccount) -> UInt64 {
     return FfiConverterTypeSafeSmartAccount.lower(value)
 }
 
@@ -4571,13 +4571,13 @@ public protocol ToolingDemoProtocol: AnyObject, Sendable {
  * A simple demo struct to test tooling functionality like log prefixing and error handling.
  */
 open class ToolingDemo: ToolingDemoProtocol, @unchecked Sendable {
-    fileprivate let pointer: UnsafeMutableRawPointer!
+    fileprivate let handle: UInt64
 
-    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public struct NoPointer {
+    public struct NoHandle {
         public init() {}
     }
 
@@ -4587,46 +4587,42 @@ open class ToolingDemo: ToolingDemoProtocol, @unchecked Sendable {
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
-        self.pointer = pointer
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
     }
 
     // This constructor can be used to instantiate a fake object.
-    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
     //
     // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public init(noPointer: NoPointer) {
-        self.pointer = nil
+    public init(noHandle: NoHandle) {
+        self.handle = 0
     }
 
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_bedrock_fn_clone_toolingdemo(self.pointer, $0) }
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_toolingdemo(self.handle, $0) }
     }
     /**
      * Creates a new tooling demo instance.
      */
 public convenience init() {
-    let pointer =
+    let handle =
         try! rustCall() {
     uniffi_bedrock_fn_constructor_toolingdemo_new($0
     )
 }
-    self.init(unsafeFromRawPointer: pointer)
+    self.init(unsafeFromHandle: handle)
 }
 
     deinit {
-        guard let pointer = pointer else {
-            return
-        }
-
-        try! rustCall { uniffi_bedrock_fn_free_toolingdemo(pointer, $0) }
+        try! rustCall { uniffi_bedrock_fn_free_toolingdemo(handle, $0) }
     }
 
     
@@ -4648,7 +4644,7 @@ open func demoAsyncOperation(delayMs: UInt64)async throws  -> String  {
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_toolingdemo_demo_async_operation(
-                    self.uniffiClonePointer(),
+                    self.uniffiCloneHandle(),
                     FfiConverterUInt64.lower(delayMs)
                 )
             },
@@ -4672,7 +4668,8 @@ open func demoAsyncOperation(delayMs: UInt64)async throws  -> String  {
      */
 open func demoAuthenticate(username: String, password: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeDemoError_lift) {
-    uniffi_bedrock_fn_method_toolingdemo_demo_authenticate(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_toolingdemo_demo_authenticate(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(username),
         FfiConverterString.lower(password),$0
     )
@@ -4689,7 +4686,8 @@ open func demoAuthenticate(username: String, password: String)throws  -> String 
      */
 open func demoGenericOperation(input: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeDemoError_lift) {
-    uniffi_bedrock_fn_method_toolingdemo_demo_generic_operation(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_toolingdemo_demo_generic_operation(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(input),$0
     )
 })
@@ -4705,7 +4703,8 @@ open func demoGenericOperation(input: String)throws  -> String  {
      */
 open func demoMixedOperation(operation: String, data: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeDemoError_lift) {
-    uniffi_bedrock_fn_method_toolingdemo_demo_mixed_operation(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_toolingdemo_demo_mixed_operation(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(operation),
         FfiConverterString.lower(data),$0
     )
@@ -4717,7 +4716,8 @@ open func demoMixedOperation(operation: String, data: String)throws  -> String  
      */
 open func getDemoResult() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
-    uniffi_bedrock_fn_method_toolingdemo_get_demo_result(self.uniffiClonePointer(),$0
+    uniffi_bedrock_fn_method_toolingdemo_get_demo_result(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
@@ -4726,7 +4726,8 @@ open func getDemoResult() -> String  {
      * Logs a simple message to test log prefixing.
      */
 open func logMessage(message: String)  {try! rustCall() {
-    uniffi_bedrock_fn_method_toolingdemo_log_message(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_toolingdemo_log_message(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(message),$0
     )
 }
@@ -4736,12 +4737,14 @@ open func logMessage(message: String)  {try! rustCall() {
      * Logs messages at different levels to test log prefixing.
      */
 open func testLogLevels()  {try! rustCall() {
-    uniffi_bedrock_fn_method_toolingdemo_test_log_levels(self.uniffiClonePointer(),$0
+    uniffi_bedrock_fn_method_toolingdemo_test_log_levels(
+            self.uniffiCloneHandle(),$0
     )
 }
 }
     
 
+    
 }
 
 
@@ -4749,33 +4752,24 @@ open func testLogLevels()  {try! rustCall() {
 @_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeToolingDemo: FfiConverter {
-
-    typealias FfiType = UnsafeMutableRawPointer
+    typealias FfiType = UInt64
     typealias SwiftType = ToolingDemo
 
-    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> ToolingDemo {
-        return ToolingDemo(unsafeFromRawPointer: pointer)
+    public static func lift(_ handle: UInt64) throws -> ToolingDemo {
+        return ToolingDemo(unsafeFromHandle: handle)
     }
 
-    public static func lower(_ value: ToolingDemo) -> UnsafeMutableRawPointer {
-        return value.uniffiClonePointer()
+    public static func lower(_ value: ToolingDemo) -> UInt64 {
+        return value.uniffiCloneHandle()
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ToolingDemo {
-        let v: UInt64 = try readInt(&buf)
-        // The Rust code won't compile if a pointer won't fit in a UInt64.
-        // We have to go via `UInt` because that's the thing that's the size of a pointer.
-        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
-        if (ptr == nil) {
-            throw UniffiInternalError.unexpectedNullPointer
-        }
-        return try lift(ptr!)
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
     }
 
     public static func write(_ value: ToolingDemo, into buf: inout [UInt8]) {
-        // This fiddling is because `Int` is the thing that's the same size as a pointer.
-        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
-        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+        writeInt(&buf, lower(value))
     }
 }
 
@@ -4783,14 +4777,14 @@ public struct FfiConverterTypeToolingDemo: FfiConverter {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeToolingDemo_lift(_ pointer: UnsafeMutableRawPointer) throws -> ToolingDemo {
-    return try FfiConverterTypeToolingDemo.lift(pointer)
+public func FfiConverterTypeToolingDemo_lift(_ handle: UInt64) throws -> ToolingDemo {
+    return try FfiConverterTypeToolingDemo.lift(handle)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeToolingDemo_lower(_ value: ToolingDemo) -> UnsafeMutableRawPointer {
+public func FfiConverterTypeToolingDemo_lower(_ value: ToolingDemo) -> UInt64 {
     return FfiConverterTypeToolingDemo.lower(value)
 }
 
@@ -4904,13 +4898,13 @@ public protocol TurnkeyProtocol: AnyObject, Sendable {
  * Allows interactions with Turnkey API.
  */
 open class Turnkey: TurnkeyProtocol, @unchecked Sendable {
-    fileprivate let pointer: UnsafeMutableRawPointer!
+    fileprivate let handle: UInt64
 
-    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public struct NoPointer {
+    public struct NoHandle {
         public init() {}
     }
 
@@ -4920,43 +4914,39 @@ open class Turnkey: TurnkeyProtocol, @unchecked Sendable {
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
-        self.pointer = pointer
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
     }
 
     // This constructor can be used to instantiate a fake object.
-    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
     //
     // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public init(noPointer: NoPointer) {
-        self.pointer = nil
+    public init(noHandle: NoHandle) {
+        self.handle = 0
     }
 
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_bedrock_fn_clone_turnkey(self.pointer, $0) }
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_turnkey(self.handle, $0) }
     }
 public convenience init() {
-    let pointer =
+    let handle =
         try! rustCall() {
     uniffi_bedrock_fn_constructor_turnkey_new($0
     )
 }
-    self.init(unsafeFromRawPointer: pointer)
+    self.init(unsafeFromHandle: handle)
 }
 
     deinit {
-        guard let pointer = pointer else {
-            return
-        }
-
-        try! rustCall { uniffi_bedrock_fn_free_turnkey(pointer, $0) }
+        try! rustCall { uniffi_bedrock_fn_free_turnkey(handle, $0) }
     }
 
     
@@ -4991,7 +4981,8 @@ public convenience init() {
      */
 open func decryptFactorSecret(sessionSecretKey: String, turnkeyOrganizationId: String, exportBundle: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeTurnkeyError_lift) {
-    uniffi_bedrock_fn_method_turnkey_decrypt_factor_secret(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_turnkey_decrypt_factor_secret(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(sessionSecretKey),
         FfiConverterString.lower(turnkeyOrganizationId),
         FfiConverterString.lower(exportBundle),$0
@@ -5014,7 +5005,8 @@ open func decryptFactorSecret(sessionSecretKey: String, turnkeyOrganizationId: S
      */
 open func derivePublicKey(apiPrivateKey: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeTurnkeyError_lift) {
-    uniffi_bedrock_fn_method_turnkey_derive_public_key(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_turnkey_derive_public_key(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(apiPrivateKey),$0
     )
 })
@@ -5045,7 +5037,8 @@ open func derivePublicKey(apiPrivateKey: String)throws  -> String  {
      */
 open func generateImportBundleForFactorSecret(factorSecret: String, importBundle: String, turnkeyOrganizationId: String, turnkeyUserId: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeTurnkeyError_lift) {
-    uniffi_bedrock_fn_method_turnkey_generate_import_bundle_for_factor_secret(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_turnkey_generate_import_bundle_for_factor_secret(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(factorSecret),
         FfiConverterString.lower(importBundle),
         FfiConverterString.lower(turnkeyOrganizationId),
@@ -5080,7 +5073,8 @@ open func generateImportBundleForFactorSecret(factorSecret: String, importBundle
      */
 open func stamp(body: String, apiPrivateKey: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeTurnkeyError_lift) {
-    uniffi_bedrock_fn_method_turnkey_stamp(self.uniffiClonePointer(),
+    uniffi_bedrock_fn_method_turnkey_stamp(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(body),
         FfiConverterString.lower(apiPrivateKey),$0
     )
@@ -5088,6 +5082,7 @@ open func stamp(body: String, apiPrivateKey: String)throws  -> String  {
 }
     
 
+    
 }
 
 
@@ -5095,33 +5090,24 @@ open func stamp(body: String, apiPrivateKey: String)throws  -> String  {
 @_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeTurnkey: FfiConverter {
-
-    typealias FfiType = UnsafeMutableRawPointer
+    typealias FfiType = UInt64
     typealias SwiftType = Turnkey
 
-    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> Turnkey {
-        return Turnkey(unsafeFromRawPointer: pointer)
+    public static func lift(_ handle: UInt64) throws -> Turnkey {
+        return Turnkey(unsafeFromHandle: handle)
     }
 
-    public static func lower(_ value: Turnkey) -> UnsafeMutableRawPointer {
-        return value.uniffiClonePointer()
+    public static func lower(_ value: Turnkey) -> UInt64 {
+        return value.uniffiCloneHandle()
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Turnkey {
-        let v: UInt64 = try readInt(&buf)
-        // The Rust code won't compile if a pointer won't fit in a UInt64.
-        // We have to go via `UInt` because that's the thing that's the size of a pointer.
-        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
-        if (ptr == nil) {
-            throw UniffiInternalError.unexpectedNullPointer
-        }
-        return try lift(ptr!)
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
     }
 
     public static func write(_ value: Turnkey, into buf: inout [UInt8]) {
-        // This fiddling is because `Int` is the thing that's the same size as a pointer.
-        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
-        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+        writeInt(&buf, lower(value))
     }
 }
 
@@ -5129,14 +5115,14 @@ public struct FfiConverterTypeTurnkey: FfiConverter {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeTurnkey_lift(_ pointer: UnsafeMutableRawPointer) throws -> Turnkey {
-    return try FfiConverterTypeTurnkey.lift(pointer)
+public func FfiConverterTypeTurnkey_lift(_ handle: UInt64) throws -> Turnkey {
+    return try FfiConverterTypeTurnkey.lift(handle)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeTurnkey_lower(_ value: Turnkey) -> UnsafeMutableRawPointer {
+public func FfiConverterTypeTurnkey_lower(_ value: Turnkey) -> UInt64 {
     return FfiConverterTypeTurnkey.lower(value)
 }
 
@@ -5146,7 +5132,7 @@ public func FfiConverterTypeTurnkey_lower(_ value: Turnkey) -> UnsafeMutableRawP
 /**
  * Result of re-encrypting the backup keypair with a new factor secret.
  */
-public struct AddNewFactorResult {
+public struct AddNewFactorResult: Equatable, Hashable {
     /**
      * The re-encrypted backup keypair that can be used to decrypt the backup data. The keypair itself
      * is encrypted with the new factor secret. Hex encoded.
@@ -5162,27 +5148,13 @@ public struct AddNewFactorResult {
          */encryptedBackupKeypairWithNewFactor: String) {
         self.encryptedBackupKeypairWithNewFactor = encryptedBackupKeypairWithNewFactor
     }
+
+    
 }
 
 #if compiler(>=6)
 extension AddNewFactorResult: Sendable {}
 #endif
-
-
-extension AddNewFactorResult: Equatable, Hashable {
-    public static func ==(lhs: AddNewFactorResult, rhs: AddNewFactorResult) -> Bool {
-        if lhs.encryptedBackupKeypairWithNewFactor != rhs.encryptedBackupKeypairWithNewFactor {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(encryptedBackupKeypairWithNewFactor)
-    }
-}
-
-
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5219,7 +5191,7 @@ public func FfiConverterTypeAddNewFactorResult_lower(_ value: AddNewFactorResult
 /**
  * Inputs supplied by foreign code (native app) for fields that cannot be derived internally
  */
-public struct BackupReportInput {
+public struct BackupReportInput: Equatable, Hashable {
     /**
      * User PKID
      */
@@ -5305,63 +5277,13 @@ public struct BackupReportInput {
         self.appVersion = appVersion
         self.platform = platform
     }
+
+    
 }
 
 #if compiler(>=6)
 extension BackupReportInput: Sendable {}
 #endif
-
-
-extension BackupReportInput: Equatable, Hashable {
-    public static func ==(lhs: BackupReportInput, rhs: BackupReportInput) -> Bool {
-        if lhs.userPkid != rhs.userPkid {
-            return false
-        }
-        if lhs.orbVerifiedAfterOct25 != rhs.orbVerifiedAfterOct25 {
-            return false
-        }
-        if lhs.isUserOrbVerified != rhs.isUserOrbVerified {
-            return false
-        }
-        if lhs.isUserDocumentVerified != rhs.isUserDocumentVerified {
-            return false
-        }
-        if lhs.hasTurnkeyAccount != rhs.hasTurnkeyAccount {
-            return false
-        }
-        if lhs.syncFactorCount != rhs.syncFactorCount {
-            return false
-        }
-        if lhs.encryptionKeys != rhs.encryptionKeys {
-            return false
-        }
-        if lhs.mainFactors != rhs.mainFactors {
-            return false
-        }
-        if lhs.appVersion != rhs.appVersion {
-            return false
-        }
-        if lhs.platform != rhs.platform {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(userPkid)
-        hasher.combine(orbVerifiedAfterOct25)
-        hasher.combine(isUserOrbVerified)
-        hasher.combine(isUserDocumentVerified)
-        hasher.combine(hasTurnkeyAccount)
-        hasher.combine(syncFactorCount)
-        hasher.combine(encryptionKeys)
-        hasher.combine(mainFactors)
-        hasher.combine(appVersion)
-        hasher.combine(platform)
-    }
-}
-
-
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5416,7 +5338,7 @@ public func FfiConverterTypeBackupReportInput_lower(_ value: BackupReportInput) 
 /**
  * Minimal representation of an OIDC factor for reporting
  */
-public struct BackupReportMainFactor {
+public struct BackupReportMainFactor: Equatable, Hashable {
     /**
      * Factor kind, e.g. OIDC
      */
@@ -5446,35 +5368,13 @@ public struct BackupReportMainFactor {
         self.account = account
         self.createdAt = createdAt
     }
+
+    
 }
 
 #if compiler(>=6)
 extension BackupReportMainFactor: Sendable {}
 #endif
-
-
-extension BackupReportMainFactor: Equatable, Hashable {
-    public static func ==(lhs: BackupReportMainFactor, rhs: BackupReportMainFactor) -> Bool {
-        if lhs.kind != rhs.kind {
-            return false
-        }
-        if lhs.account != rhs.account {
-            return false
-        }
-        if lhs.createdAt != rhs.createdAt {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(kind)
-        hasher.combine(account)
-        hasher.combine(createdAt)
-    }
-}
-
-
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5515,7 +5415,7 @@ public func FfiConverterTypeBackupReportMainFactor_lower(_ value: BackupReportMa
 /**
  * Result of creating a new sealed backup for a user.
  */
-public struct CreatedBackup {
+public struct CreatedBackup: Equatable, Hashable {
     /**
      * The backup data, encrypted with the backup keypair.
      */
@@ -5565,43 +5465,13 @@ public struct CreatedBackup {
         self.manifestHash = manifestHash
         self.backupAccountId = backupAccountId
     }
+
+    
 }
 
 #if compiler(>=6)
 extension CreatedBackup: Sendable {}
 #endif
-
-
-extension CreatedBackup: Equatable, Hashable {
-    public static func ==(lhs: CreatedBackup, rhs: CreatedBackup) -> Bool {
-        if lhs.sealedBackupData != rhs.sealedBackupData {
-            return false
-        }
-        if lhs.encryptedBackupKeypair != rhs.encryptedBackupKeypair {
-            return false
-        }
-        if lhs.backupKeypairPublicKey != rhs.backupKeypairPublicKey {
-            return false
-        }
-        if lhs.manifestHash != rhs.manifestHash {
-            return false
-        }
-        if lhs.backupAccountId != rhs.backupAccountId {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(sealedBackupData)
-        hasher.combine(encryptedBackupKeypair)
-        hasher.combine(backupKeypairPublicKey)
-        hasher.combine(manifestHash)
-        hasher.combine(backupAccountId)
-    }
-}
-
-
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5646,7 +5516,7 @@ public func FfiConverterTypeCreatedBackup_lower(_ value: CreatedBackup) -> RustB
 /**
  * Result of decrypting a sealed backup.
  */
-public struct DecryptedBackup {
+public struct DecryptedBackup: Equatable, Hashable {
     /**
      * The JSON-encoded root key. Exposed to foreign code to store securely.
      *
@@ -5674,31 +5544,13 @@ public struct DecryptedBackup {
         self.rootKeyJson = rootKeyJson
         self.backupKeypairPublicKey = backupKeypairPublicKey
     }
+
+    
 }
 
 #if compiler(>=6)
 extension DecryptedBackup: Sendable {}
 #endif
-
-
-extension DecryptedBackup: Equatable, Hashable {
-    public static func ==(lhs: DecryptedBackup, rhs: DecryptedBackup) -> Bool {
-        if lhs.rootKeyJson != rhs.rootKeyJson {
-            return false
-        }
-        if lhs.backupKeypairPublicKey != rhs.backupKeypairPublicKey {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(rootKeyJson)
-        hasher.combine(backupKeypairPublicKey)
-    }
-}
-
-
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5737,7 +5589,7 @@ public func FfiConverterTypeDecryptedBackup_lower(_ value: DecryptedBackup) -> R
 /**
  * Simple name/value HTTP header pair for passing additional headers
  */
-public struct HttpHeader {
+public struct HttpHeader: Equatable, Hashable {
     /**
      * Header name
      */
@@ -5759,31 +5611,13 @@ public struct HttpHeader {
         self.name = name
         self.value = value
     }
+
+    
 }
 
 #if compiler(>=6)
 extension HttpHeader: Sendable {}
 #endif
-
-
-extension HttpHeader: Equatable, Hashable {
-    public static func ==(lhs: HttpHeader, rhs: HttpHeader) -> Bool {
-        if lhs.name != rhs.name {
-            return false
-        }
-        if lhs.value != rhs.value {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(name)
-        hasher.combine(value)
-    }
-}
-
-
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5825,7 +5659,7 @@ public func FfiConverterTypeHttpHeader_lower(_ value: HttpHeader) -> RustBuffer 
  * # Notes
  * Only the required attributes are returned to Bedrock (avoids additional memory allocations)
  */
-public struct RetrieveMetadataResponsePayload {
+public struct RetrieveMetadataResponsePayload: Equatable, Hashable {
     /**
      * The hex-encoded manifest hash.
      */
@@ -5863,39 +5697,13 @@ public struct RetrieveMetadataResponsePayload {
         self.syncFactorCount = syncFactorCount
         self.mainFactors = mainFactors
     }
+
+    
 }
 
 #if compiler(>=6)
 extension RetrieveMetadataResponsePayload: Sendable {}
 #endif
-
-
-extension RetrieveMetadataResponsePayload: Equatable, Hashable {
-    public static func ==(lhs: RetrieveMetadataResponsePayload, rhs: RetrieveMetadataResponsePayload) -> Bool {
-        if lhs.manifestHash != rhs.manifestHash {
-            return false
-        }
-        if lhs.encryptionKeys != rhs.encryptionKeys {
-            return false
-        }
-        if lhs.syncFactorCount != rhs.syncFactorCount {
-            return false
-        }
-        if lhs.mainFactors != rhs.mainFactors {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(manifestHash)
-        hasher.combine(encryptionKeys)
-        hasher.combine(syncFactorCount)
-        hasher.combine(mainFactors)
-    }
-}
-
-
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5942,7 +5750,7 @@ public func FfiConverterTypeRetrieveMetadataResponsePayload_lower(_ value: Retri
  *
  * Reference: <https://github.com/safe-global/safe-smart-account/blob/v1.4.1/contracts/Safe.sol#L139>
  */
-public struct SafeTransaction {
+public struct SafeTransaction: Equatable, Hashable {
     /**
      * Destination address of the Safe transaction.
      * Solidity type: `address`
@@ -6048,63 +5856,13 @@ public struct SafeTransaction {
         self.refundReceiver = refundReceiver
         self.nonce = nonce
     }
+
+    
 }
 
 #if compiler(>=6)
 extension SafeTransaction: Sendable {}
 #endif
-
-
-extension SafeTransaction: Equatable, Hashable {
-    public static func ==(lhs: SafeTransaction, rhs: SafeTransaction) -> Bool {
-        if lhs.to != rhs.to {
-            return false
-        }
-        if lhs.value != rhs.value {
-            return false
-        }
-        if lhs.data != rhs.data {
-            return false
-        }
-        if lhs.operation != rhs.operation {
-            return false
-        }
-        if lhs.safeTxGas != rhs.safeTxGas {
-            return false
-        }
-        if lhs.baseGas != rhs.baseGas {
-            return false
-        }
-        if lhs.gasPrice != rhs.gasPrice {
-            return false
-        }
-        if lhs.gasToken != rhs.gasToken {
-            return false
-        }
-        if lhs.refundReceiver != rhs.refundReceiver {
-            return false
-        }
-        if lhs.nonce != rhs.nonce {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(to)
-        hasher.combine(value)
-        hasher.combine(data)
-        hasher.combine(operation)
-        hasher.combine(safeTxGas)
-        hasher.combine(baseGas)
-        hasher.combine(gasPrice)
-        hasher.combine(gasToken)
-        hasher.combine(refundReceiver)
-        hasher.combine(nonce)
-    }
-}
-
-
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6164,7 +5922,7 @@ public func FfiConverterTypeSafeTransaction_lower(_ value: SafeTransaction) -> R
  * # Notes
  * `authorization` and `challenge_token` are skipped because they are handled by the Native App.
  */
-public struct SyncSubmitRequest {
+public struct SyncSubmitRequest: Equatable, Hashable {
     /**
      * Hex-encoded current manifest hash (client state before the update).
      */
@@ -6194,35 +5952,13 @@ public struct SyncSubmitRequest {
         self.newManifestHash = newManifestHash
         self.sealedBackup = sealedBackup
     }
+
+    
 }
 
 #if compiler(>=6)
 extension SyncSubmitRequest: Sendable {}
 #endif
-
-
-extension SyncSubmitRequest: Equatable, Hashable {
-    public static func ==(lhs: SyncSubmitRequest, rhs: SyncSubmitRequest) -> Bool {
-        if lhs.currentManifestHash != rhs.currentManifestHash {
-            return false
-        }
-        if lhs.newManifestHash != rhs.newManifestHash {
-            return false
-        }
-        if lhs.sealedBackup != rhs.sealedBackup {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(currentManifestHash)
-        hasher.combine(newManifestHash)
-        hasher.combine(sealedBackup)
-    }
-}
-
-
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6267,7 +6003,7 @@ public func FfiConverterTypeSyncSubmitRequest_lower(_ value: SyncSubmitRequest) 
  *
  * Reference: <https://github.com/Uniswap/permit2/blob/cc56ad0f3439c502c246fc5cfcc3db92bb8b7219/src/interfaces/ISignatureTransfer.sol#L30>
  */
-public struct UnparsedPermitTransferFrom {
+public struct UnparsedPermitTransferFrom: Equatable, Hashable {
     /**
      * The token and amount details for a transfer signed in the permit transfer signature
      */
@@ -6311,39 +6047,13 @@ public struct UnparsedPermitTransferFrom {
         self.nonce = nonce
         self.deadline = deadline
     }
+
+    
 }
 
 #if compiler(>=6)
 extension UnparsedPermitTransferFrom: Sendable {}
 #endif
-
-
-extension UnparsedPermitTransferFrom: Equatable, Hashable {
-    public static func ==(lhs: UnparsedPermitTransferFrom, rhs: UnparsedPermitTransferFrom) -> Bool {
-        if lhs.permitted != rhs.permitted {
-            return false
-        }
-        if lhs.spender != rhs.spender {
-            return false
-        }
-        if lhs.nonce != rhs.nonce {
-            return false
-        }
-        if lhs.deadline != rhs.deadline {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(permitted)
-        hasher.combine(spender)
-        hasher.combine(nonce)
-        hasher.combine(deadline)
-    }
-}
-
-
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6390,7 +6100,7 @@ public func FfiConverterTypeUnparsedPermitTransferFrom_lower(_ value: UnparsedPe
  *
  * Reference: <https://github.com/Uniswap/permit2/blob/cc56ad0f3439c502c246fc5cfcc3db92bb8b7219/src/interfaces/ISignatureTransfer.sol#L22>
  */
-public struct UnparsedTokenPermissions {
+public struct UnparsedTokenPermissions: Equatable, Hashable {
     /**
      * Solidity type: `address`
      */
@@ -6412,31 +6122,13 @@ public struct UnparsedTokenPermissions {
         self.token = token
         self.amount = amount
     }
+
+    
 }
 
 #if compiler(>=6)
 extension UnparsedTokenPermissions: Sendable {}
 #endif
-
-
-extension UnparsedTokenPermissions: Equatable, Hashable {
-    public static func ==(lhs: UnparsedTokenPermissions, rhs: UnparsedTokenPermissions) -> Bool {
-        if lhs.token != rhs.token {
-            return false
-        }
-        if lhs.amount != rhs.amount {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(token)
-        hasher.combine(amount)
-    }
-}
-
-
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6481,7 +6173,7 @@ public func FfiConverterTypeUnparsedTokenPermissions_lower(_ value: UnparsedToke
  *
  * Note the types of this struct are types that can be lifted from foreign languages to be then parsed and validated.
  */
-public struct UnparsedUserOperation {
+public struct UnparsedUserOperation: Equatable, Hashable {
     /**
      * The address of the smart contract account (Solidity type: `address`)
      */
@@ -6607,83 +6299,13 @@ public struct UnparsedUserOperation {
         self.factory = factory
         self.factoryData = factoryData
     }
+
+    
 }
 
 #if compiler(>=6)
 extension UnparsedUserOperation: Sendable {}
 #endif
-
-
-extension UnparsedUserOperation: Equatable, Hashable {
-    public static func ==(lhs: UnparsedUserOperation, rhs: UnparsedUserOperation) -> Bool {
-        if lhs.sender != rhs.sender {
-            return false
-        }
-        if lhs.nonce != rhs.nonce {
-            return false
-        }
-        if lhs.callData != rhs.callData {
-            return false
-        }
-        if lhs.callGasLimit != rhs.callGasLimit {
-            return false
-        }
-        if lhs.verificationGasLimit != rhs.verificationGasLimit {
-            return false
-        }
-        if lhs.preVerificationGas != rhs.preVerificationGas {
-            return false
-        }
-        if lhs.maxFeePerGas != rhs.maxFeePerGas {
-            return false
-        }
-        if lhs.maxPriorityFeePerGas != rhs.maxPriorityFeePerGas {
-            return false
-        }
-        if lhs.paymaster != rhs.paymaster {
-            return false
-        }
-        if lhs.paymasterVerificationGasLimit != rhs.paymasterVerificationGasLimit {
-            return false
-        }
-        if lhs.paymasterPostOpGasLimit != rhs.paymasterPostOpGasLimit {
-            return false
-        }
-        if lhs.paymasterData != rhs.paymasterData {
-            return false
-        }
-        if lhs.signature != rhs.signature {
-            return false
-        }
-        if lhs.factory != rhs.factory {
-            return false
-        }
-        if lhs.factoryData != rhs.factoryData {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(sender)
-        hasher.combine(nonce)
-        hasher.combine(callData)
-        hasher.combine(callGasLimit)
-        hasher.combine(verificationGasLimit)
-        hasher.combine(preVerificationGas)
-        hasher.combine(maxFeePerGas)
-        hasher.combine(maxPriorityFeePerGas)
-        hasher.combine(paymaster)
-        hasher.combine(paymasterVerificationGasLimit)
-        hasher.combine(paymasterPostOpGasLimit)
-        hasher.combine(paymasterData)
-        hasher.combine(signature)
-        hasher.combine(factory)
-        hasher.combine(factoryData)
-    }
-}
-
-
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6748,7 +6370,7 @@ public func FfiConverterTypeUnparsedUserOperation_lower(_ value: UnparsedUserOpe
 /**
  * Verified attestation data from the enclave.
  */
-public struct VerifiedAttestation {
+public struct VerifiedAttestation: Equatable, Hashable {
     /**
      * The base64 encoded public key of the enclave
      */
@@ -6778,35 +6400,13 @@ public struct VerifiedAttestation {
         self.timestamp = timestamp
         self.moduleId = moduleId
     }
+
+    
 }
 
 #if compiler(>=6)
 extension VerifiedAttestation: Sendable {}
 #endif
-
-
-extension VerifiedAttestation: Equatable, Hashable {
-    public static func ==(lhs: VerifiedAttestation, rhs: VerifiedAttestation) -> Bool {
-        if lhs.enclavePublicKey != rhs.enclavePublicKey {
-            return false
-        }
-        if lhs.timestamp != rhs.timestamp {
-            return false
-        }
-        if lhs.moduleId != rhs.moduleId {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(enclavePublicKey)
-        hasher.combine(timestamp)
-        hasher.combine(moduleId)
-    }
-}
-
-
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6847,7 +6447,7 @@ public func FfiConverterTypeVerifiedAttestation_lower(_ value: VerifiedAttestati
 /**
  * Verified attestation with ciphertext
  */
-public struct VerifiedAttestationWithCiphertext {
+public struct VerifiedAttestationWithCiphertext: Equatable, Hashable {
     /**
      * The verified attestation
      */
@@ -6869,31 +6469,13 @@ public struct VerifiedAttestationWithCiphertext {
         self.verifiedAttestation = verifiedAttestation
         self.ciphertext = ciphertext
     }
+
+    
 }
 
 #if compiler(>=6)
 extension VerifiedAttestationWithCiphertext: Sendable {}
 #endif
-
-
-extension VerifiedAttestationWithCiphertext: Equatable, Hashable {
-    public static func ==(lhs: VerifiedAttestationWithCiphertext, rhs: VerifiedAttestationWithCiphertext) -> Bool {
-        if lhs.verifiedAttestation != rhs.verifiedAttestation {
-            return false
-        }
-        if lhs.ciphertext != rhs.ciphertext {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(verifiedAttestation)
-        hasher.combine(ciphertext)
-    }
-}
-
-
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6932,7 +6514,7 @@ public func FfiConverterTypeVerifiedAttestationWithCiphertext_lower(_ value: Ver
 /**
  * Errors that can occur when working with backups and manifests.
  */
-public enum BackupError: Swift.Error {
+public enum BackupError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -7048,8 +6630,19 @@ public enum BackupError: Swift.Error {
      */
     case FileSystem(FileSystemError
     )
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
 }
 
+#if compiler(>=6)
+extension BackupError: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7233,28 +6826,13 @@ public func FfiConverterTypeBackupError_lower(_ value: BackupError) -> RustBuffe
     return FfiConverterTypeBackupError.lower(value)
 }
 
-
-extension BackupError: Equatable, Hashable {}
-
-
-
-
-extension BackupError: Foundation.LocalizedError {
-    public var errorDescription: String? {
-        String(reflecting: self)
-    }
-}
-
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * A global identifier that identifies the type of file.
  */
 
-public enum BackupFileDesignator {
+public enum BackupFileDesignator: Equatable, Hashable {
     
     /**
      * Orb Personal Custody Package (PCP) or "Orb Credential"
@@ -7268,8 +6846,10 @@ public enum BackupFileDesignator {
      * Secure Document (NFC) Personal Custody Package (PCP) or "Secure Document Credential"
      */
     case secureDocumentPkg
-}
 
+
+
+}
 
 #if compiler(>=6)
 extension BackupFileDesignator: Sendable {}
@@ -7330,20 +6910,13 @@ public func FfiConverterTypeBackupFileDesignator_lower(_ value: BackupFileDesign
 }
 
 
-extension BackupFileDesignator: Equatable, Hashable {}
-
-
-
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * Kinds of encryption keys present in backup metadata
  */
 
-public enum BackupReportEncryptionKeyKind {
+public enum BackupReportEncryptionKeyKind: Equatable, Hashable {
     
     /**
      * Passkey PRF-derived key
@@ -7357,8 +6930,10 @@ public enum BackupReportEncryptionKeyKind {
      * iCloud Keychain-stored random key (iOS < 18 path)
      */
     case icloudKeychain
-}
 
+
+
+}
 
 #if compiler(>=6)
 extension BackupReportEncryptionKeyKind: Sendable {}
@@ -7419,20 +6994,13 @@ public func FfiConverterTypeBackupReportEncryptionKeyKind_lower(_ value: BackupR
 }
 
 
-extension BackupReportEncryptionKeyKind: Equatable, Hashable {}
-
-
-
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * High-level event kinds we care to report
  */
 
-public enum BackupReportEventKind {
+public enum BackupReportEventKind: Equatable, Hashable {
     
     /**
      * Backup sync or any backup file changes (store/remove)
@@ -7454,8 +7022,10 @@ public enum BackupReportEventKind {
      * Remove main factor
      */
     case removeMainFactor
-}
 
+
+
+}
 
 #if compiler(>=6)
 extension BackupReportEventKind: Sendable {}
@@ -7528,20 +7098,13 @@ public func FfiConverterTypeBackupReportEventKind_lower(_ value: BackupReportEve
 }
 
 
-extension BackupReportEventKind: Equatable, Hashable {}
-
-
-
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * Represents the environment for Bedrock operations
  */
 
-public enum BedrockEnvironment {
+public enum BedrockEnvironment: Equatable, Hashable {
     
     /**
      * Staging environment
@@ -7551,8 +7114,10 @@ public enum BedrockEnvironment {
      * Production environment
      */
     case production
-}
 
+
+
+}
 
 #if compiler(>=6)
 extension BedrockEnvironment: Sendable {}
@@ -7607,13 +7172,6 @@ public func FfiConverterTypeBedrockEnvironment_lower(_ value: BedrockEnvironment
 }
 
 
-extension BedrockEnvironment: Equatable, Hashable {}
-
-
-
-
-
-
 
 /**
  * Error type for demonstrating bedrock error handling patterns.
@@ -7624,7 +7182,7 @@ extension BedrockEnvironment: Equatable, Hashable {}
  * - Implements `From<anyhow::Error>` for automatic conversion
  * - Provides helper methods for error handling
  */
-public enum DemoError: Swift.Error {
+public enum DemoError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -7665,8 +7223,19 @@ public enum DemoError: Swift.Error {
      */
     case FileSystem(FileSystemError
     )
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
 }
 
+#if compiler(>=6)
+extension DemoError: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7752,25 +7321,10 @@ public func FfiConverterTypeDemoError_lower(_ value: DemoError) -> RustBuffer {
 }
 
 
-extension DemoError: Equatable, Hashable {}
-
-
-
-
-extension DemoError: Foundation.LocalizedError {
-    public var errorDescription: String? {
-        String(reflecting: self)
-    }
-}
-
-
-
-
-
 /**
  * Represents errors that can occur during enclave attestation verification
  */
-public enum EnclaveAttestationError: Swift.Error {
+public enum EnclaveAttestationError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -7838,8 +7392,19 @@ public enum EnclaveAttestationError: Swift.Error {
      */
     case FileSystem(FileSystemError
     )
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
 }
 
+#if compiler(>=6)
+extension EnclaveAttestationError: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7965,28 +7530,13 @@ public func FfiConverterTypeEnclaveAttestationError_lower(_ value: EnclaveAttest
     return FfiConverterTypeEnclaveAttestationError.lower(value)
 }
 
-
-extension EnclaveAttestationError: Equatable, Hashable {}
-
-
-
-
-extension EnclaveAttestationError: Foundation.LocalizedError {
-    public var errorDescription: String? {
-        String(reflecting: self)
-    }
-}
-
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * The factor type used to encrypt the backup keypair.
  */
 
-public enum FactorType {
+public enum FactorType: Equatable, Hashable {
     
     /**
      * Generated using a passkey PRF.
@@ -8000,8 +7550,10 @@ public enum FactorType {
      * Generated randomly and stored in Turnkey.
      */
     case turnkey
-}
 
+
+
+}
 
 #if compiler(>=6)
 extension FactorType: Sendable {}
@@ -8062,18 +7614,11 @@ public func FfiConverterTypeFactorType_lower(_ value: FactorType) -> RustBuffer 
 }
 
 
-extension FactorType: Equatable, Hashable {}
-
-
-
-
-
-
 
 /**
  * Errors that can occur during filesystem operations
  */
-public enum FileSystemError: Swift.Error {
+public enum FileSystemError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -8095,8 +7640,19 @@ public enum FileSystemError: Swift.Error {
      */
     case UnexpectedUniFfiCallbackError(String
     )
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
 }
 
+#if compiler(>=6)
+extension FileSystemError: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -8168,25 +7724,10 @@ public func FfiConverterTypeFileSystemError_lower(_ value: FileSystemError) -> R
 }
 
 
-extension FileSystemError: Equatable, Hashable {}
-
-
-
-
-extension FileSystemError: Foundation.LocalizedError {
-    public var errorDescription: String? {
-        String(reflecting: self)
-    }
-}
-
-
-
-
-
 /**
  * Test error enum to verify `FileSystemError` is automatically included
  */
-public enum FileSystemTestError: Swift.Error {
+public enum FileSystemTestError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -8211,8 +7752,19 @@ public enum FileSystemTestError: Swift.Error {
      */
     case FileSystem(FileSystemError
     )
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
 }
 
+#if compiler(>=6)
+extension FileSystemTestError: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -8282,25 +7834,10 @@ public func FfiConverterTypeFileSystemTestError_lower(_ value: FileSystemTestErr
 }
 
 
-extension FileSystemTestError: Equatable, Hashable {}
-
-
-
-
-extension FileSystemTestError: Foundation.LocalizedError {
-    public var errorDescription: String? {
-        String(reflecting: self)
-    }
-}
-
-
-
-
-
 /**
  * Represents HTTP-related errors that can occur during network requests.
  */
-public enum HttpError: Swift.Error {
+public enum HttpError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -8364,8 +7901,19 @@ public enum HttpError: Swift.Error {
      */
     case FileSystem(FileSystemError
     )
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
 }
 
+#if compiler(>=6)
+extension HttpError: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -8475,28 +8023,13 @@ public func FfiConverterTypeHttpError_lower(_ value: HttpError) -> RustBuffer {
     return FfiConverterTypeHttpError.lower(value)
 }
 
-
-extension HttpError: Equatable, Hashable {}
-
-
-
-
-extension HttpError: Foundation.LocalizedError {
-    public var errorDescription: String? {
-        String(reflecting: self)
-    }
-}
-
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * HTTP methods supported by the authenticated HTTP client.
  */
 
-public enum HttpMethod {
+public enum HttpMethod: Equatable, Hashable {
     
     /**
      * HTTP GET method for retrieving data
@@ -8506,8 +8039,10 @@ public enum HttpMethod {
      * HTTP POST method for sending data
      */
     case post
-}
 
+
+
+}
 
 #if compiler(>=6)
 extension HttpMethod: Sendable {}
@@ -8562,13 +8097,6 @@ public func FfiConverterTypeHttpMethod_lower(_ value: HttpMethod) -> RustBuffer 
 }
 
 
-extension HttpMethod: Equatable, Hashable {}
-
-
-
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
@@ -8577,7 +8105,7 @@ extension HttpMethod: Equatable, Hashable {}
  * This enum represents the severity levels that can be used when logging messages.
  */
 
-public enum LogLevel {
+public enum LogLevel: Equatable, Hashable {
     
     /**
      * Designates very low priority, often extremely detailed messages.
@@ -8599,8 +8127,10 @@ public enum LogLevel {
      * Designates error events that might still allow the application to continue running.
      */
     case error
-}
 
+
+
+}
 
 #if compiler(>=6)
 extension LogLevel: Sendable {}
@@ -8673,20 +8203,13 @@ public func FfiConverterTypeLogLevel_lower(_ value: LogLevel) -> RustBuffer {
 }
 
 
-extension LogLevel: Equatable, Hashable {}
-
-
-
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * Supported blockchain networks for Bedrock operations
  */
 
-public enum Network : UInt32 {
+public enum Network: UInt32, Equatable, Hashable {
     
     /**
      * Ethereum (chain ID: 1)
@@ -8700,8 +8223,10 @@ public enum Network : UInt32 {
      * World Chain (chain ID: 480)
      */
     case worldChain = 480
-}
 
+
+
+}
 
 #if compiler(>=6)
 extension Network: Sendable {}
@@ -8762,20 +8287,13 @@ public func FfiConverterTypeNetwork_lower(_ value: Network) -> RustBuffer {
 }
 
 
-extension Network: Equatable, Hashable {}
-
-
-
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * Platform enum as reported by clients
  */
 
-public enum Os {
+public enum Os: Equatable, Hashable {
     
     /**
      * Android platform
@@ -8785,8 +8303,10 @@ public enum Os {
      * iOS platform
      */
     case ios
-}
 
+
+
+}
 
 #if compiler(>=6)
 extension Os: Sendable {}
@@ -8841,18 +8361,11 @@ public func FfiConverterTypeOs_lower(_ value: Os) -> RustBuffer {
 }
 
 
-extension Os: Equatable, Hashable {}
-
-
-
-
-
-
 
 /**
  * Represents primitive errors on Bedrock. These errors may not be called **from** FFI.
  */
-public enum PrimitiveError: Swift.Error {
+public enum PrimitiveError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -8885,8 +8398,19 @@ public enum PrimitiveError: Swift.Error {
      */
     case FileSystem(FileSystemError
     )
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
 }
 
+#if compiler(>=6)
+extension PrimitiveError: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -8966,25 +8490,10 @@ public func FfiConverterTypePrimitiveError_lower(_ value: PrimitiveError) -> Rus
 }
 
 
-extension PrimitiveError: Equatable, Hashable {}
-
-
-
-
-extension PrimitiveError: Foundation.LocalizedError {
-    public var errorDescription: String? {
-        String(reflecting: self)
-    }
-}
-
-
-
-
-
 /**
  * Errors that can occur when working with the secure module.
  */
-public enum RootKeyError: Swift.Error {
+public enum RootKeyError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -9010,8 +8519,19 @@ public enum RootKeyError: Swift.Error {
      */
     case FileSystem(FileSystemError
     )
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
 }
 
+#if compiler(>=6)
+extension RootKeyError: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9086,25 +8606,10 @@ public func FfiConverterTypeRootKeyError_lower(_ value: RootKeyError) -> RustBuf
 }
 
 
-extension RootKeyError: Equatable, Hashable {}
-
-
-
-
-extension RootKeyError: Foundation.LocalizedError {
-    public var errorDescription: String? {
-        String(reflecting: self)
-    }
-}
-
-
-
-
-
 /**
  * Errors that can occur when interacting with RPC operations.
  */
-public enum RpcError: Swift.Error {
+public enum RpcError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -9163,8 +8668,19 @@ public enum RpcError: Swift.Error {
      */
     case FileSystem(FileSystemError
     )
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
 }
 
+#if compiler(>=6)
+extension RpcError: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9277,28 +8793,13 @@ public func FfiConverterTypeRpcError_lower(_ value: RpcError) -> RustBuffer {
     return FfiConverterTypeRpcError.lower(value)
 }
 
-
-extension RpcError: Equatable, Hashable {}
-
-
-
-
-extension RpcError: Foundation.LocalizedError {
-    public var errorDescription: String? {
-        String(reflecting: self)
-    }
-}
-
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * 4337 provider selection to be passed by native apps
  */
 
-public enum RpcProviderName {
+public enum RpcProviderName: Equatable, Hashable {
     
     /**
      * Use Alchemy as 4337 provider
@@ -9308,8 +8809,10 @@ public enum RpcProviderName {
      * Use Pimlico as 4337 provider
      */
     case pimlico
-}
 
+
+
+}
 
 #if compiler(>=6)
 extension RpcProviderName: Sendable {}
@@ -9364,13 +8867,6 @@ public func FfiConverterTypeRpcProviderName_lower(_ value: RpcProviderName) -> R
 }
 
 
-extension RpcProviderName: Equatable, Hashable {}
-
-
-
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
@@ -9379,7 +8875,7 @@ extension RpcProviderName: Equatable, Hashable {}
  * Reference: <https://github.com/safe-global/safe-smart-account/blob/v1.4.1/contracts/libraries/Enum.sol#L9>
  */
 
-public enum SafeOperation : UInt8 {
+public enum SafeOperation: UInt8, Equatable, Hashable {
     
     /**
      * Performs a standard message call.
@@ -9389,8 +8885,10 @@ public enum SafeOperation : UInt8 {
      * Performs a `delegatecall`. Executes the target contract’s code in the context of the Safe's storage.
      */
     case delegateCall = 1
-}
 
+
+
+}
 
 #if compiler(>=6)
 extension SafeOperation: Sendable {}
@@ -9445,18 +8943,11 @@ public func FfiConverterTypeSafeOperation_lower(_ value: SafeOperation) -> RustB
 }
 
 
-extension SafeOperation: Equatable, Hashable {}
-
-
-
-
-
-
 
 /**
  * Errors that can occur when working with Safe Smart Accounts.
  */
-public enum SafeSmartAccountError: Swift.Error {
+public enum SafeSmartAccountError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -9514,8 +9005,19 @@ public enum SafeSmartAccountError: Swift.Error {
      */
     case FileSystem(FileSystemError
     )
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
 }
 
+#if compiler(>=6)
+extension SafeSmartAccountError: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9635,25 +9137,10 @@ public func FfiConverterTypeSafeSmartAccountError_lower(_ value: SafeSmartAccoun
 }
 
 
-extension SafeSmartAccountError: Equatable, Hashable {}
-
-
-
-
-extension SafeSmartAccountError: Foundation.LocalizedError {
-    public var errorDescription: String? {
-        String(reflecting: self)
-    }
-}
-
-
-
-
-
 /**
  * Errors that can occur when interacting with transaction operations.
  */
-public enum TransactionError: Swift.Error {
+public enum TransactionError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -9675,8 +9162,19 @@ public enum TransactionError: Swift.Error {
      */
     case FileSystem(FileSystemError
     )
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
 }
 
+#if compiler(>=6)
+extension TransactionError: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9745,21 +9243,6 @@ public func FfiConverterTypeTransactionError_lower(_ value: TransactionError) ->
     return FfiConverterTypeTransactionError.lower(value)
 }
 
-
-extension TransactionError: Equatable, Hashable {}
-
-
-
-
-extension TransactionError: Foundation.LocalizedError {
-    public var errorDescription: String? {
-        String(reflecting: self)
-    }
-}
-
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
@@ -9767,12 +9250,14 @@ extension TransactionError: Foundation.LocalizedError {
  * NOTE: Ordering should never change, only new values should be added
  */
 
-public enum TransferAssociation : UInt8 {
+public enum TransferAssociation: UInt8, Equatable, Hashable {
     
     case none = 1
     case xmtpMessage = 2
-}
 
+
+
+}
 
 #if compiler(>=6)
 extension TransferAssociation: Sendable {}
@@ -9827,15 +9312,8 @@ public func FfiConverterTypeTransferAssociation_lower(_ value: TransferAssociati
 }
 
 
-extension TransferAssociation: Equatable, Hashable {}
 
-
-
-
-
-
-
-public enum TurnkeyError: Swift.Error {
+public enum TurnkeyError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -9864,8 +9342,19 @@ public enum TurnkeyError: Swift.Error {
      */
     case FileSystem(FileSystemError
     )
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
 }
 
+#if compiler(>=6)
+extension TurnkeyError: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9985,21 +9474,6 @@ public func FfiConverterTypeTurnkeyError_lift(_ buf: RustBuffer) throws -> Turnk
 public func FfiConverterTypeTurnkeyError_lower(_ value: TurnkeyError) -> RustBuffer {
     return FfiConverterTypeTurnkeyError.lower(value)
 }
-
-
-extension TurnkeyError: Equatable, Hashable {}
-
-
-
-
-extension TurnkeyError: Foundation.LocalizedError {
-    public var errorDescription: String? {
-        String(reflecting: self)
-    }
-}
-
-
-
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -10365,7 +9839,7 @@ fileprivate struct FfiConverterSequenceTypeBackupReportEncryptionKeyKind: FfiCon
     }
 }
 private let UNIFFI_RUST_FUTURE_POLL_READY: Int8 = 0
-private let UNIFFI_RUST_FUTURE_POLL_MAYBE_READY: Int8 = 1
+private let UNIFFI_RUST_FUTURE_POLL_WAKE: Int8 = 1
 
 fileprivate let uniffiContinuationHandleMap = UniffiHandleMap<UnsafeContinuation<Int8, Never>>()
 
@@ -10389,7 +9863,9 @@ fileprivate func uniffiRustCallAsync<F, T>(
         pollResult = await withUnsafeContinuation {
             pollFunc(
                 rustFuture,
-                uniffiFutureContinuationCallback,
+                { handle, pollResult in
+                    uniffiFutureContinuationCallback(handle: handle, pollResult: pollResult)
+                },
                 uniffiContinuationHandleMap.insert(obj: $0)
             )
         }
@@ -10413,8 +9889,9 @@ fileprivate func uniffiFutureContinuationCallback(handle: UInt64, pollResult: In
 private func uniffiTraitInterfaceCallAsync<T>(
     makeCall: @escaping () async throws -> T,
     handleSuccess: @escaping (T) -> (),
-    handleError: @escaping (Int8, RustBuffer) -> ()
-) -> UniffiForeignFuture {
+    handleError: @escaping (Int8, RustBuffer) -> (),
+    droppedCallback: UnsafeMutablePointer<UniffiForeignFutureDroppedCallbackStruct>
+) {
     let task = Task {
         do {
             handleSuccess(try await makeCall())
@@ -10423,16 +9900,19 @@ private func uniffiTraitInterfaceCallAsync<T>(
         }
     }
     let handle = UNIFFI_FOREIGN_FUTURE_HANDLE_MAP.insert(obj: task)
-    return UniffiForeignFuture(handle: handle, free: uniffiForeignFutureFree)
-
+    droppedCallback.pointee = UniffiForeignFutureDroppedCallbackStruct(
+        handle: handle,
+        free: uniffiForeignFutureDroppedCallback
+    )
 }
 
 private func uniffiTraitInterfaceCallAsyncWithError<T, E>(
     makeCall: @escaping () async throws -> T,
     handleSuccess: @escaping (T) -> (),
     handleError: @escaping (Int8, RustBuffer) -> (),
-    lowerError: @escaping (E) -> RustBuffer
-) -> UniffiForeignFuture {
+    lowerError: @escaping (E) -> RustBuffer,
+    droppedCallback: UnsafeMutablePointer<UniffiForeignFutureDroppedCallbackStruct>
+) {
     let task = Task {
         do {
             handleSuccess(try await makeCall())
@@ -10443,7 +9923,10 @@ private func uniffiTraitInterfaceCallAsyncWithError<T, E>(
         }
     }
     let handle = UNIFFI_FOREIGN_FUTURE_HANDLE_MAP.insert(obj: task)
-    return UniffiForeignFuture(handle: handle, free: uniffiForeignFutureFree)
+    droppedCallback.pointee = UniffiForeignFutureDroppedCallbackStruct(
+        handle: handle,
+        free: uniffiForeignFutureDroppedCallback
+    )
 }
 
 // Borrow the callback handle map implementation to store foreign future handles
@@ -10460,7 +9943,7 @@ fileprivate protocol UniffiForeignFutureTask {
 
 extension Task: UniffiForeignFutureTask {}
 
-private func uniffiForeignFutureFree(handle: UInt64) {
+private func uniffiForeignFutureDroppedCallback(handle: UInt64) {
     do {
         let task = try UNIFFI_FOREIGN_FUTURE_HANDLE_MAP.remove(handle: handle)
         // Set the cancellation flag on the task.  If it's still running, the code can check the
@@ -10468,7 +9951,7 @@ private func uniffiForeignFutureFree(handle: UInt64) {
         // a no-op.
         task.cancel()
     } catch {
-        print("uniffiForeignFutureFree: handle missing from handlemap")
+        print("uniffiForeignFutureDroppedCallback: handle missing from handlemap")
     }
 }
 
@@ -10692,7 +10175,7 @@ private enum InitializationResult {
 // the code inside is only computed once.
 private let initializationResult: InitializationResult = {
     // Get the bindings contract version from our ComponentInterface
-    let bindings_contract_version = 29
+    let bindings_contract_version = 30
     // Get the scaffolding contract version by calling the into the dylib
     let scaffolding_contract_version = ffi_bedrock_uniffi_contract_version()
     if bindings_contract_version != scaffolding_contract_version {
@@ -10840,6 +10323,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_manifestmanager_store_file() != 35335) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_rootkey_derive_public_backup_account_id() != 53782) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_rootkey_is_equal_to() != 29866) {
