@@ -963,7 +963,7 @@ public protocol BackupManagerProtocol: AnyObject, Sendable {
      * # Errors
      * Returns an error if HTTP client is not initialized or network/serialization fails.
      */
-    func sendEvent(kind: BackupReportEventKind, success: Bool, errorMessage: String?, timestampIso8601: String) async throws 
+    func sendEvent(kind: BackupReportEventKind, success: Bool, updatedMainFactors: [BackupReportMainFactor], isBackupEnabled: Bool, errorMessage: String?, timestampIso8601: String) async throws 
     
     /**
      * **Client Event Streams**. Set the base report attributes for event reports.
@@ -1214,13 +1214,13 @@ open func postDeleteBackup()throws   {try rustCallWithError(FfiConverterTypeBack
      * # Errors
      * Returns an error if HTTP client is not initialized or network/serialization fails.
      */
-open func sendEvent(kind: BackupReportEventKind, success: Bool, errorMessage: String?, timestampIso8601: String)async throws   {
+open func sendEvent(kind: BackupReportEventKind, success: Bool, updatedMainFactors: [BackupReportMainFactor], isBackupEnabled: Bool, errorMessage: String?, timestampIso8601: String)async throws   {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_backupmanager_send_event(
                     self.uniffiClonePointer(),
-                    FfiConverterTypeBackupReportEventKind_lower(kind),FfiConverterBool.lower(success),FfiConverterOptionString.lower(errorMessage),FfiConverterString.lower(timestampIso8601)
+                    FfiConverterTypeBackupReportEventKind_lower(kind),FfiConverterBool.lower(success),FfiConverterSequenceTypeBackupReportMainFactor.lower(updatedMainFactors),FfiConverterBool.lower(isBackupEnabled),FfiConverterOptionString.lower(errorMessage),FfiConverterString.lower(timestampIso8601)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_void,
@@ -5258,6 +5258,10 @@ public func FfiConverterTypeAddNewFactorResult_lower(_ value: AddNewFactorResult
  */
 public struct BackupReportInput {
     /**
+     * Whether backup is enabled
+     */
+    public var isBackupEnabled: Bool?
+    /**
      * User PKID
      */
     public var userPkid: String?
@@ -5302,6 +5306,9 @@ public struct BackupReportInput {
     // declare one manually.
     public init(
         /**
+         * Whether backup is enabled
+         */isBackupEnabled: Bool?, 
+        /**
          * User PKID
          */userPkid: String?, 
         /**
@@ -5331,6 +5338,7 @@ public struct BackupReportInput {
         /**
          * Platform (OS where the app is running)
          */platform: Os?) {
+        self.isBackupEnabled = isBackupEnabled
         self.userPkid = userPkid
         self.orbVerifiedAfterOct25 = orbVerifiedAfterOct25
         self.isUserOrbVerified = isUserOrbVerified
@@ -5351,6 +5359,9 @@ extension BackupReportInput: Sendable {}
 
 extension BackupReportInput: Equatable, Hashable {
     public static func ==(lhs: BackupReportInput, rhs: BackupReportInput) -> Bool {
+        if lhs.isBackupEnabled != rhs.isBackupEnabled {
+            return false
+        }
         if lhs.userPkid != rhs.userPkid {
             return false
         }
@@ -5385,6 +5396,7 @@ extension BackupReportInput: Equatable, Hashable {
     }
 
     public func hash(into hasher: inout Hasher) {
+        hasher.combine(isBackupEnabled)
         hasher.combine(userPkid)
         hasher.combine(orbVerifiedAfterOct25)
         hasher.combine(isUserOrbVerified)
@@ -5407,6 +5419,7 @@ public struct FfiConverterTypeBackupReportInput: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BackupReportInput {
         return
             try BackupReportInput(
+                isBackupEnabled: FfiConverterOptionBool.read(from: &buf), 
                 userPkid: FfiConverterOptionString.read(from: &buf), 
                 orbVerifiedAfterOct25: FfiConverterOptionBool.read(from: &buf), 
                 isUserOrbVerified: FfiConverterOptionBool.read(from: &buf), 
@@ -5421,6 +5434,7 @@ public struct FfiConverterTypeBackupReportInput: FfiConverterRustBuffer {
     }
 
     public static func write(_ value: BackupReportInput, into buf: inout [UInt8]) {
+        FfiConverterOptionBool.write(value.isBackupEnabled, into: &buf)
         FfiConverterOptionString.write(value.userPkid, into: &buf)
         FfiConverterOptionBool.write(value.orbVerifiedAfterOct25, into: &buf)
         FfiConverterOptionBool.write(value.isUserOrbVerified, into: &buf)
@@ -7476,14 +7490,6 @@ public enum BackupReportEventKind {
      */
     case sync
     /**
-     * Backup enabled
-     */
-    case enable
-    /**
-     * Backup disabled
-     */
-    case disable
-    /**
      * Add main factor
      */
     case addMainFactor
@@ -7510,13 +7516,9 @@ public struct FfiConverterTypeBackupReportEventKind: FfiConverterRustBuffer {
         
         case 1: return .sync
         
-        case 2: return .enable
+        case 2: return .addMainFactor
         
-        case 3: return .disable
-        
-        case 4: return .addMainFactor
-        
-        case 5: return .removeMainFactor
+        case 3: return .removeMainFactor
         
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -7530,20 +7532,12 @@ public struct FfiConverterTypeBackupReportEventKind: FfiConverterRustBuffer {
             writeInt(&buf, Int32(1))
         
         
-        case .enable:
+        case .addMainFactor:
             writeInt(&buf, Int32(2))
         
         
-        case .disable:
-            writeInt(&buf, Int32(3))
-        
-        
-        case .addMainFactor:
-            writeInt(&buf, Int32(4))
-        
-        
         case .removeMainFactor:
-            writeInt(&buf, Int32(5))
+            writeInt(&buf, Int32(3))
         
         }
     }
@@ -10858,7 +10852,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_backupmanager_post_delete_backup() != 63845) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_backupmanager_send_event() != 57515) {
+    if (uniffi_bedrock_checksum_method_backupmanager_send_event() != 2939) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_backupmanager_set_backup_report_attributes() != 12627) {
