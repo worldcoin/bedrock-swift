@@ -963,7 +963,7 @@ public protocol BackupManagerProtocol: AnyObject, Sendable {
      * # Errors
      * Returns an error if HTTP client is not initialized or network/serialization fails.
      */
-    func sendEvent(kind: BackupReportEventKind, success: Bool, updatedMainFactors: [BackupReportMainFactor], isBackupEnabled: Bool, errorMessage: String?, timestampIso8601: String) async throws 
+    func sendEvent(kind: BackupReportEventKind, success: Bool, errorMessage: String?, timestampIso8601: String) async throws 
     
     /**
      * **Client Event Streams**. Set the base report attributes for event reports.
@@ -1214,13 +1214,13 @@ open func postDeleteBackup()throws   {try rustCallWithError(FfiConverterTypeBack
      * # Errors
      * Returns an error if HTTP client is not initialized or network/serialization fails.
      */
-open func sendEvent(kind: BackupReportEventKind, success: Bool, updatedMainFactors: [BackupReportMainFactor], isBackupEnabled: Bool, errorMessage: String?, timestampIso8601: String)async throws   {
+open func sendEvent(kind: BackupReportEventKind, success: Bool, errorMessage: String?, timestampIso8601: String)async throws   {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_backupmanager_send_event(
                     self.uniffiClonePointer(),
-                    FfiConverterTypeBackupReportEventKind_lower(kind),FfiConverterBool.lower(success),FfiConverterSequenceTypeBackupReportMainFactor.lower(updatedMainFactors),FfiConverterBool.lower(isBackupEnabled),FfiConverterOptionString.lower(errorMessage),FfiConverterString.lower(timestampIso8601)
+                    FfiConverterTypeBackupReportEventKind_lower(kind),FfiConverterBool.lower(success),FfiConverterOptionString.lower(errorMessage),FfiConverterString.lower(timestampIso8601)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_void,
@@ -4197,6 +4197,51 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
      */
     func transactionTransfer(tokenAddress: String, toAddress: String, amount: String, transferAssociation: TransferAssociation?) async throws  -> HexEncodedData
     
+    /**
+     * Claims a campaign gift using the `WorldCampaignManager` contract.
+     *
+     * # Errors
+     * - Returns [`TransactionError::PrimitiveError`] if any of the provided attributes are invalid.
+     * - Returns [`TransactionError::Generic`] if the transaction submission fails.
+     */
+    func transactionWorldCampaignManagerClaim(campaignIdStr: String) async throws  -> HexEncodedData
+    
+    /**
+     * Sponsors a campaign gift using the `WorldCampaignManager` contract.
+     *
+     * # Errors
+     * - Returns [`TransactionError::PrimitiveError`] if any of the provided attributes are invalid.
+     * - Returns [`TransactionError::Generic`] if the transaction submission fails.
+     */
+    func transactionWorldCampaignManagerSponsor(campaignIdStr: String, toAddress: String) async throws  -> HexEncodedData
+    
+    /**
+     * Cancel a gift using the `WorldGiftManager` contract.
+     *
+     * # Errors
+     * - Returns [`TransactionError::PrimitiveError`] if any of the provided attributes are invalid.
+     * - Returns [`TransactionError::Generic`] if the transaction submission fails.
+     */
+    func transactionWorldGiftManagerCancel(giftIdStr: String) async throws  -> WorldGiftManagerResult
+    
+    /**
+     * Sends a gift using the `WorldGiftManager` contract.
+     *
+     * # Errors
+     * - Returns [`TransactionError::PrimitiveError`] if any of the provided attributes are invalid.
+     * - Returns [`TransactionError::Generic`] if the transaction submission fails.
+     */
+    func transactionWorldGiftManagerGift(tokenAddress: String, toAddress: String, amount: String) async throws  -> WorldGiftManagerResult
+    
+    /**
+     * Reddems a gift using the `WorldGiftManager` contract.
+     *
+     * # Errors
+     * - Returns [`TransactionError::PrimitiveError`] if any of the provided attributes are invalid.
+     * - Returns [`TransactionError::Generic`] if the transaction submission fails.
+     */
+    func transactionWorldGiftManagerRedeem(giftIdStr: String) async throws  -> WorldGiftManagerResult
+    
 }
 /**
  * A Safe Smart Account (previously Gnosis Safe) is the representation of a Safe smart contract.
@@ -4476,6 +4521,126 @@ open func transactionTransfer(tokenAddress: String, toAddress: String, amount: S
             completeFunc: ffi_bedrock_rust_future_complete_pointer,
             freeFunc: ffi_bedrock_rust_future_free_pointer,
             liftFunc: FfiConverterTypeHexEncodedData_lift,
+            errorHandler: FfiConverterTypeTransactionError_lift
+        )
+}
+    
+    /**
+     * Claims a campaign gift using the `WorldCampaignManager` contract.
+     *
+     * # Errors
+     * - Returns [`TransactionError::PrimitiveError`] if any of the provided attributes are invalid.
+     * - Returns [`TransactionError::Generic`] if the transaction submission fails.
+     */
+open func transactionWorldCampaignManagerClaim(campaignIdStr: String)async throws  -> HexEncodedData  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_safesmartaccount_transaction_world_campaign_manager_claim(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(campaignIdStr)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_pointer,
+            completeFunc: ffi_bedrock_rust_future_complete_pointer,
+            freeFunc: ffi_bedrock_rust_future_free_pointer,
+            liftFunc: FfiConverterTypeHexEncodedData_lift,
+            errorHandler: FfiConverterTypeTransactionError_lift
+        )
+}
+    
+    /**
+     * Sponsors a campaign gift using the `WorldCampaignManager` contract.
+     *
+     * # Errors
+     * - Returns [`TransactionError::PrimitiveError`] if any of the provided attributes are invalid.
+     * - Returns [`TransactionError::Generic`] if the transaction submission fails.
+     */
+open func transactionWorldCampaignManagerSponsor(campaignIdStr: String, toAddress: String)async throws  -> HexEncodedData  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_safesmartaccount_transaction_world_campaign_manager_sponsor(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(campaignIdStr),FfiConverterString.lower(toAddress)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_pointer,
+            completeFunc: ffi_bedrock_rust_future_complete_pointer,
+            freeFunc: ffi_bedrock_rust_future_free_pointer,
+            liftFunc: FfiConverterTypeHexEncodedData_lift,
+            errorHandler: FfiConverterTypeTransactionError_lift
+        )
+}
+    
+    /**
+     * Cancel a gift using the `WorldGiftManager` contract.
+     *
+     * # Errors
+     * - Returns [`TransactionError::PrimitiveError`] if any of the provided attributes are invalid.
+     * - Returns [`TransactionError::Generic`] if the transaction submission fails.
+     */
+open func transactionWorldGiftManagerCancel(giftIdStr: String)async throws  -> WorldGiftManagerResult  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_safesmartaccount_transaction_world_gift_manager_cancel(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(giftIdStr)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
+            completeFunc: ffi_bedrock_rust_future_complete_rust_buffer,
+            freeFunc: ffi_bedrock_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeWorldGiftManagerResult_lift,
+            errorHandler: FfiConverterTypeTransactionError_lift
+        )
+}
+    
+    /**
+     * Sends a gift using the `WorldGiftManager` contract.
+     *
+     * # Errors
+     * - Returns [`TransactionError::PrimitiveError`] if any of the provided attributes are invalid.
+     * - Returns [`TransactionError::Generic`] if the transaction submission fails.
+     */
+open func transactionWorldGiftManagerGift(tokenAddress: String, toAddress: String, amount: String)async throws  -> WorldGiftManagerResult  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_safesmartaccount_transaction_world_gift_manager_gift(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(tokenAddress),FfiConverterString.lower(toAddress),FfiConverterString.lower(amount)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
+            completeFunc: ffi_bedrock_rust_future_complete_rust_buffer,
+            freeFunc: ffi_bedrock_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeWorldGiftManagerResult_lift,
+            errorHandler: FfiConverterTypeTransactionError_lift
+        )
+}
+    
+    /**
+     * Reddems a gift using the `WorldGiftManager` contract.
+     *
+     * # Errors
+     * - Returns [`TransactionError::PrimitiveError`] if any of the provided attributes are invalid.
+     * - Returns [`TransactionError::Generic`] if the transaction submission fails.
+     */
+open func transactionWorldGiftManagerRedeem(giftIdStr: String)async throws  -> WorldGiftManagerResult  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_safesmartaccount_transaction_world_gift_manager_redeem(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(giftIdStr)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
+            completeFunc: ffi_bedrock_rust_future_complete_rust_buffer,
+            freeFunc: ffi_bedrock_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeWorldGiftManagerResult_lift,
             errorHandler: FfiConverterTypeTransactionError_lift
         )
 }
@@ -6981,6 +7146,61 @@ public func FfiConverterTypeVerifiedAttestationWithCiphertext_lower(_ value: Ver
 
 
 /**
+ * Return value from the World Gift Manager methods
+ */
+public struct WorldGiftManagerResult {
+    public var userOpHash: HexEncodedData
+    public var giftId: HexEncodedData
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(userOpHash: HexEncodedData, giftId: HexEncodedData) {
+        self.userOpHash = userOpHash
+        self.giftId = giftId
+    }
+}
+
+#if compiler(>=6)
+extension WorldGiftManagerResult: Sendable {}
+#endif
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeWorldGiftManagerResult: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> WorldGiftManagerResult {
+        return
+            try WorldGiftManagerResult(
+                userOpHash: FfiConverterTypeHexEncodedData.read(from: &buf), 
+                giftId: FfiConverterTypeHexEncodedData.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: WorldGiftManagerResult, into buf: inout [UInt8]) {
+        FfiConverterTypeHexEncodedData.write(value.userOpHash, into: &buf)
+        FfiConverterTypeHexEncodedData.write(value.giftId, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeWorldGiftManagerResult_lift(_ buf: RustBuffer) throws -> WorldGiftManagerResult {
+    return try FfiConverterTypeWorldGiftManagerResult.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeWorldGiftManagerResult_lower(_ value: WorldGiftManagerResult) -> RustBuffer {
+    return FfiConverterTypeWorldGiftManagerResult.lower(value)
+}
+
+
+/**
  * Errors that can occur when working with backups and manifests.
  */
 public enum BackupError: Swift.Error {
@@ -7315,10 +7535,6 @@ public enum BackupFileDesignator {
      * Document (NFC) Personal Custody Package (PCP) or "Document Credential"
      */
     case documentPkg
-    /**
-     * Secure Document (NFC) Personal Custody Package (PCP) or "Secure Document Credential"
-     */
-    case secureDocumentPkg
 }
 
 
@@ -7340,8 +7556,6 @@ public struct FfiConverterTypeBackupFileDesignator: FfiConverterRustBuffer {
         
         case 2: return .documentPkg
         
-        case 3: return .secureDocumentPkg
-        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -7356,10 +7570,6 @@ public struct FfiConverterTypeBackupFileDesignator: FfiConverterRustBuffer {
         
         case .documentPkg:
             writeInt(&buf, Int32(2))
-        
-        
-        case .secureDocumentPkg:
-            writeInt(&buf, Int32(3))
         
         }
     }
@@ -9401,6 +9611,10 @@ extension RpcError: Foundation.LocalizedError {
 public enum RpcProviderName {
     
     /**
+     * Let TFH backend load balance between available providers
+     */
+    case any
+    /**
      * Use Alchemy as 4337 provider
      */
     case alchemy
@@ -9425,9 +9639,11 @@ public struct FfiConverterTypeRpcProviderName: FfiConverterRustBuffer {
         let variant: Int32 = try readInt(&buf)
         switch variant {
         
-        case 1: return .alchemy
+        case 1: return .any
         
-        case 2: return .pimlico
+        case 2: return .alchemy
+        
+        case 3: return .pimlico
         
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -9437,12 +9653,16 @@ public struct FfiConverterTypeRpcProviderName: FfiConverterRustBuffer {
         switch value {
         
         
-        case .alchemy:
+        case .any:
             writeInt(&buf, Int32(1))
         
         
-        case .pimlico:
+        case .alchemy:
             writeInt(&buf, Int32(2))
+        
+        
+        case .pimlico:
+            writeInt(&buf, Int32(3))
         
         }
     }
@@ -10852,7 +11072,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_backupmanager_post_delete_backup() != 63845) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_backupmanager_send_event() != 2939) {
+    if (uniffi_bedrock_checksum_method_backupmanager_send_event() != 57515) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_backupmanager_set_backup_report_attributes() != 12627) {
@@ -10967,6 +11187,21 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_transfer() != 61864) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_world_campaign_manager_claim() != 16848) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_world_campaign_manager_sponsor() != 63698) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_world_gift_manager_cancel() != 15209) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_world_gift_manager_gift() != 5557) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_world_gift_manager_redeem() != 18290) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_toolingdemo_demo_async_operation() != 60685) {
