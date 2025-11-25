@@ -4242,6 +4242,23 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
      */
     func transactionWorldGiftManagerRedeem(giftIdStr: String) async throws  -> WorldGiftManagerResult
     
+    /**
+     * Gets a custom user operation receipt for a given user operation hash via the global RPC client.
+     *
+     * This is a convenience wrapper around [`RpcClient::wa_get_user_operation_receipt`]
+     * that uses the globally configured HTTP client.
+     *
+     * # Errors
+     *
+     * Returns an error if:
+     * - The global HTTP client has not been initialized.
+     * - The HTTP request fails.
+     * - The request serialization fails.
+     * - The response parsing fails.
+     * - The RPC returns an error response.
+     */
+    func waGetUserOperationReceipt(userOpHash: String) async throws  -> WaGetUserOperationReceiptResponse
+    
 }
 /**
  * A Safe Smart Account (previously Gnosis Safe) is the representation of a Safe smart contract.
@@ -4642,6 +4659,38 @@ open func transactionWorldGiftManagerRedeem(giftIdStr: String)async throws  -> W
             freeFunc: ffi_bedrock_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeWorldGiftManagerResult_lift,
             errorHandler: FfiConverterTypeTransactionError_lift
+        )
+}
+    
+    /**
+     * Gets a custom user operation receipt for a given user operation hash via the global RPC client.
+     *
+     * This is a convenience wrapper around [`RpcClient::wa_get_user_operation_receipt`]
+     * that uses the globally configured HTTP client.
+     *
+     * # Errors
+     *
+     * Returns an error if:
+     * - The global HTTP client has not been initialized.
+     * - The HTTP request fails.
+     * - The request serialization fails.
+     * - The response parsing fails.
+     * - The RPC returns an error response.
+     */
+open func waGetUserOperationReceipt(userOpHash: String)async throws  -> WaGetUserOperationReceiptResponse  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_safesmartaccount_wa_get_user_operation_receipt(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(userOpHash)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
+            completeFunc: ffi_bedrock_rust_future_complete_rust_buffer,
+            freeFunc: ffi_bedrock_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeWaGetUserOperationReceiptResponse_lift,
+            errorHandler: FfiConverterTypeRpcError_lift
         )
 }
     
@@ -7142,6 +7191,189 @@ public func FfiConverterTypeVerifiedAttestationWithCiphertext_lift(_ buf: RustBu
 #endif
 public func FfiConverterTypeVerifiedAttestationWithCiphertext_lower(_ value: VerifiedAttestationWithCiphertext) -> RustBuffer {
     return FfiConverterTypeVerifiedAttestationWithCiphertext.lower(value)
+}
+
+
+/**
+ * Response from `wa_getUserOperationReceipt`
+ */
+public struct WaGetUserOperationReceiptResponse {
+    /**
+     * User operation hash
+     */
+    public var userOpHash: String
+    /**
+     * Transaction hash, if the user operation has been included in a block
+     */
+    public var transactionHash: String?
+    /**
+     * Sender address
+     */
+    public var sender: String
+    /**
+     * Success status ("pending", "error", "true", or "false")
+     */
+    public var success: String
+    /**
+     * Source (flexible field representing the transaction type or origin)
+     */
+    public var source: String
+    /**
+     * Source ID, if available
+     */
+    public var sourceId: String?
+    /**
+     * Self-sponsor token, if applicable
+     */
+    public var selfSponsorToken: String?
+    /**
+     * Self-sponsor amount, if applicable
+     */
+    public var selfSponsorAmount: String?
+    /**
+     * Block timestamp, if the user operation has been included in a block
+     */
+    public var blockTimestamp: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * User operation hash
+         */userOpHash: String, 
+        /**
+         * Transaction hash, if the user operation has been included in a block
+         */transactionHash: String?, 
+        /**
+         * Sender address
+         */sender: String, 
+        /**
+         * Success status ("pending", "error", "true", or "false")
+         */success: String, 
+        /**
+         * Source (flexible field representing the transaction type or origin)
+         */source: String, 
+        /**
+         * Source ID, if available
+         */sourceId: String?, 
+        /**
+         * Self-sponsor token, if applicable
+         */selfSponsorToken: String?, 
+        /**
+         * Self-sponsor amount, if applicable
+         */selfSponsorAmount: String?, 
+        /**
+         * Block timestamp, if the user operation has been included in a block
+         */blockTimestamp: String?) {
+        self.userOpHash = userOpHash
+        self.transactionHash = transactionHash
+        self.sender = sender
+        self.success = success
+        self.source = source
+        self.sourceId = sourceId
+        self.selfSponsorToken = selfSponsorToken
+        self.selfSponsorAmount = selfSponsorAmount
+        self.blockTimestamp = blockTimestamp
+    }
+}
+
+#if compiler(>=6)
+extension WaGetUserOperationReceiptResponse: Sendable {}
+#endif
+
+
+extension WaGetUserOperationReceiptResponse: Equatable, Hashable {
+    public static func ==(lhs: WaGetUserOperationReceiptResponse, rhs: WaGetUserOperationReceiptResponse) -> Bool {
+        if lhs.userOpHash != rhs.userOpHash {
+            return false
+        }
+        if lhs.transactionHash != rhs.transactionHash {
+            return false
+        }
+        if lhs.sender != rhs.sender {
+            return false
+        }
+        if lhs.success != rhs.success {
+            return false
+        }
+        if lhs.source != rhs.source {
+            return false
+        }
+        if lhs.sourceId != rhs.sourceId {
+            return false
+        }
+        if lhs.selfSponsorToken != rhs.selfSponsorToken {
+            return false
+        }
+        if lhs.selfSponsorAmount != rhs.selfSponsorAmount {
+            return false
+        }
+        if lhs.blockTimestamp != rhs.blockTimestamp {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(userOpHash)
+        hasher.combine(transactionHash)
+        hasher.combine(sender)
+        hasher.combine(success)
+        hasher.combine(source)
+        hasher.combine(sourceId)
+        hasher.combine(selfSponsorToken)
+        hasher.combine(selfSponsorAmount)
+        hasher.combine(blockTimestamp)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeWaGetUserOperationReceiptResponse: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> WaGetUserOperationReceiptResponse {
+        return
+            try WaGetUserOperationReceiptResponse(
+                userOpHash: FfiConverterString.read(from: &buf), 
+                transactionHash: FfiConverterOptionString.read(from: &buf), 
+                sender: FfiConverterString.read(from: &buf), 
+                success: FfiConverterString.read(from: &buf), 
+                source: FfiConverterString.read(from: &buf), 
+                sourceId: FfiConverterOptionString.read(from: &buf), 
+                selfSponsorToken: FfiConverterOptionString.read(from: &buf), 
+                selfSponsorAmount: FfiConverterOptionString.read(from: &buf), 
+                blockTimestamp: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: WaGetUserOperationReceiptResponse, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.userOpHash, into: &buf)
+        FfiConverterOptionString.write(value.transactionHash, into: &buf)
+        FfiConverterString.write(value.sender, into: &buf)
+        FfiConverterString.write(value.success, into: &buf)
+        FfiConverterString.write(value.source, into: &buf)
+        FfiConverterOptionString.write(value.sourceId, into: &buf)
+        FfiConverterOptionString.write(value.selfSponsorToken, into: &buf)
+        FfiConverterOptionString.write(value.selfSponsorAmount, into: &buf)
+        FfiConverterOptionString.write(value.blockTimestamp, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeWaGetUserOperationReceiptResponse_lift(_ buf: RustBuffer) throws -> WaGetUserOperationReceiptResponse {
+    return try FfiConverterTypeWaGetUserOperationReceiptResponse.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeWaGetUserOperationReceiptResponse_lower(_ value: WaGetUserOperationReceiptResponse) -> RustBuffer {
+    return FfiConverterTypeWaGetUserOperationReceiptResponse.lower(value)
 }
 
 
@@ -11202,6 +11434,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_world_gift_manager_redeem() != 18290) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_safesmartaccount_wa_get_user_operation_receipt() != 21989) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_toolingdemo_demo_async_operation() != 60685) {
