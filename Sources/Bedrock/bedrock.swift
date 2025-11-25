@@ -7211,9 +7211,9 @@ public struct WaGetUserOperationReceiptResponse {
      */
     public var sender: String
     /**
-     * Success status ("pending", "error", "true", or "false")
+     * Status (`pending`, `error`, `mined_success`, or `mined_revert`)
      */
-    public var success: String
+    public var status: String
     /**
      * Source (flexible field representing the transaction type or origin)
      */
@@ -7248,8 +7248,8 @@ public struct WaGetUserOperationReceiptResponse {
          * Sender address
          */sender: String, 
         /**
-         * Success status ("pending", "error", "true", or "false")
-         */success: String, 
+         * Status (`pending`, `error`, `mined_success`, or `mined_revert`)
+         */status: String, 
         /**
          * Source (flexible field representing the transaction type or origin)
          */source: String, 
@@ -7268,7 +7268,7 @@ public struct WaGetUserOperationReceiptResponse {
         self.userOpHash = userOpHash
         self.transactionHash = transactionHash
         self.sender = sender
-        self.success = success
+        self.status = status
         self.source = source
         self.sourceId = sourceId
         self.selfSponsorToken = selfSponsorToken
@@ -7293,7 +7293,7 @@ extension WaGetUserOperationReceiptResponse: Equatable, Hashable {
         if lhs.sender != rhs.sender {
             return false
         }
-        if lhs.success != rhs.success {
+        if lhs.status != rhs.status {
             return false
         }
         if lhs.source != rhs.source {
@@ -7318,7 +7318,7 @@ extension WaGetUserOperationReceiptResponse: Equatable, Hashable {
         hasher.combine(userOpHash)
         hasher.combine(transactionHash)
         hasher.combine(sender)
-        hasher.combine(success)
+        hasher.combine(status)
         hasher.combine(source)
         hasher.combine(sourceId)
         hasher.combine(selfSponsorToken)
@@ -7339,7 +7339,7 @@ public struct FfiConverterTypeWaGetUserOperationReceiptResponse: FfiConverterRus
                 userOpHash: FfiConverterString.read(from: &buf), 
                 transactionHash: FfiConverterOptionString.read(from: &buf), 
                 sender: FfiConverterString.read(from: &buf), 
-                success: FfiConverterString.read(from: &buf), 
+                status: FfiConverterString.read(from: &buf), 
                 source: FfiConverterString.read(from: &buf), 
                 sourceId: FfiConverterOptionString.read(from: &buf), 
                 selfSponsorToken: FfiConverterOptionString.read(from: &buf), 
@@ -7352,7 +7352,7 @@ public struct FfiConverterTypeWaGetUserOperationReceiptResponse: FfiConverterRus
         FfiConverterString.write(value.userOpHash, into: &buf)
         FfiConverterOptionString.write(value.transactionHash, into: &buf)
         FfiConverterString.write(value.sender, into: &buf)
-        FfiConverterString.write(value.success, into: &buf)
+        FfiConverterString.write(value.status, into: &buf)
         FfiConverterString.write(value.source, into: &buf)
         FfiConverterOptionString.write(value.sourceId, into: &buf)
         FfiConverterOptionString.write(value.selfSponsorToken, into: &buf)
