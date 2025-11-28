@@ -4096,8 +4096,8 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
      * max_fee_per_gas: "0x1af6f".to_string(),
      * max_priority_fee_per_gas: "0x1adb0".to_string(),
      * paymaster: Some("0xEF725Aa22d43Ea69FB22bE2EBe6ECa205a6BCf5B".to_string()),
-     * paymaster_verification_gas_limit: "0x7415".to_string(),
-     * paymaster_post_op_gas_limit: "0x".to_string(),
+     * paymaster_verification_gas_limit: Some("0x7415".to_string()),
+     * paymaster_post_op_gas_limit: Some("0x".to_string()),
      * paymaster_data: Some("000000000000000067789a97c4af0f8ae7acc9237c8f9611a0eb4662009d366b8defdf5f68fed25d22ca77be64b8eef49d917c3f8642ca539571594a84be9d0ee717c099160b79a845bea2111b".to_string()),
      * factory: None,
      * factory_data: None,
@@ -4398,8 +4398,8 @@ open func personalSign(chainId: UInt32, message: String)throws  -> HexEncodedDat
      * max_fee_per_gas: "0x1af6f".to_string(),
      * max_priority_fee_per_gas: "0x1adb0".to_string(),
      * paymaster: Some("0xEF725Aa22d43Ea69FB22bE2EBe6ECa205a6BCf5B".to_string()),
-     * paymaster_verification_gas_limit: "0x7415".to_string(),
-     * paymaster_post_op_gas_limit: "0x".to_string(),
+     * paymaster_verification_gas_limit: Some("0x7415".to_string()),
+     * paymaster_post_op_gas_limit: Some("0x".to_string()),
      * paymaster_data: Some("000000000000000067789a97c4af0f8ae7acc9237c8f9611a0eb4662009d366b8defdf5f68fed25d22ca77be64b8eef49d917c3f8642ca539571594a84be9d0ee717c099160b79a845bea2111b".to_string()),
      * factory: None,
      * factory_data: None,
@@ -6786,11 +6786,11 @@ public struct UnparsedUserOperation {
     /**
      * Paymaster verification gas limit (Solidity type: `uint128`)
      */
-    public var paymasterVerificationGasLimit: String
+    public var paymasterVerificationGasLimit: String?
     /**
      * Paymaster post-operation gas limit (Solidity type: `uint128`)
      */
-    public var paymasterPostOpGasLimit: String
+    public var paymasterPostOpGasLimit: String?
     /**
      * Paymaster additional data for verification (Solidity type: `bytes`)
      */
@@ -6840,10 +6840,10 @@ public struct UnparsedUserOperation {
          */paymaster: String?, 
         /**
          * Paymaster verification gas limit (Solidity type: `uint128`)
-         */paymasterVerificationGasLimit: String, 
+         */paymasterVerificationGasLimit: String?, 
         /**
          * Paymaster post-operation gas limit (Solidity type: `uint128`)
-         */paymasterPostOpGasLimit: String, 
+         */paymasterPostOpGasLimit: String?, 
         /**
          * Paymaster additional data for verification (Solidity type: `bytes`)
          */paymasterData: String?, 
@@ -6966,8 +6966,8 @@ public struct FfiConverterTypeUnparsedUserOperation: FfiConverterRustBuffer {
                 maxFeePerGas: FfiConverterString.read(from: &buf), 
                 maxPriorityFeePerGas: FfiConverterString.read(from: &buf), 
                 paymaster: FfiConverterOptionString.read(from: &buf), 
-                paymasterVerificationGasLimit: FfiConverterString.read(from: &buf), 
-                paymasterPostOpGasLimit: FfiConverterString.read(from: &buf), 
+                paymasterVerificationGasLimit: FfiConverterOptionString.read(from: &buf), 
+                paymasterPostOpGasLimit: FfiConverterOptionString.read(from: &buf), 
                 paymasterData: FfiConverterOptionString.read(from: &buf), 
                 signature: FfiConverterString.read(from: &buf), 
                 factory: FfiConverterOptionString.read(from: &buf), 
@@ -6985,8 +6985,8 @@ public struct FfiConverterTypeUnparsedUserOperation: FfiConverterRustBuffer {
         FfiConverterString.write(value.maxFeePerGas, into: &buf)
         FfiConverterString.write(value.maxPriorityFeePerGas, into: &buf)
         FfiConverterOptionString.write(value.paymaster, into: &buf)
-        FfiConverterString.write(value.paymasterVerificationGasLimit, into: &buf)
-        FfiConverterString.write(value.paymasterPostOpGasLimit, into: &buf)
+        FfiConverterOptionString.write(value.paymasterVerificationGasLimit, into: &buf)
+        FfiConverterOptionString.write(value.paymasterPostOpGasLimit, into: &buf)
         FfiConverterOptionString.write(value.paymasterData, into: &buf)
         FfiConverterString.write(value.signature, into: &buf)
         FfiConverterOptionString.write(value.factory, into: &buf)
@@ -11406,7 +11406,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_safesmartaccount_personal_sign() != 21352) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_sign_4337_op() != 4646) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_sign_4337_op() != 61690) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_sign_permit2_transfer() != 839) {
