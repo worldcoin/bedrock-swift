@@ -7939,6 +7939,10 @@ public enum BackupReportEventKind {
      * Remove main factor
      */
     case removeMainFactor
+    /**
+     * Triggered when a user performs a log in (prev. called restore) with the new system
+     */
+    case logIn
 }
 
 
@@ -7962,6 +7966,8 @@ public struct FfiConverterTypeBackupReportEventKind: FfiConverterRustBuffer {
         
         case 3: return .removeMainFactor
         
+        case 4: return .logIn
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -7980,6 +7986,10 @@ public struct FfiConverterTypeBackupReportEventKind: FfiConverterRustBuffer {
         
         case .removeMainFactor:
             writeInt(&buf, Int32(3))
+        
+        
+        case .logIn:
+            writeInt(&buf, Int32(4))
         
         }
     }
