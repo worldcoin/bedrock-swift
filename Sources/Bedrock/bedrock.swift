@@ -7539,6 +7539,11 @@ public enum BackupError: Swift.Error {
      */
     case InvalidManifestHash
     /**
+     * Backup not found.
+     */
+    case ClientEventsError(String
+    )
+    /**
      * A generic error that can wrap any anyhow error.
      */
     case Generic(
@@ -7600,10 +7605,13 @@ public struct FfiConverterTypeBackupError: FfiConverterRustBuffer {
             )
         case 20: return .BackupApiNotInitialized
         case 21: return .InvalidManifestHash
-        case 22: return .Generic(
+        case 22: return .ClientEventsError(
+            try FfiConverterString.read(from: &buf)
+            )
+        case 23: return .Generic(
             errorMessage: try FfiConverterString.read(from: &buf)
             )
-        case 23: return .FileSystem(
+        case 24: return .FileSystem(
             try FfiConverterTypeFileSystemError.read(from: &buf)
             )
 
@@ -7708,13 +7716,18 @@ public struct FfiConverterTypeBackupError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(21))
         
         
-        case let .Generic(errorMessage):
+        case let .ClientEventsError(v1):
             writeInt(&buf, Int32(22))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .Generic(errorMessage):
+            writeInt(&buf, Int32(23))
             FfiConverterString.write(errorMessage, into: &buf)
             
         
         case let .FileSystem(v1):
-            writeInt(&buf, Int32(23))
+            writeInt(&buf, Int32(24))
             FfiConverterTypeFileSystemError.write(v1, into: &buf)
             
         }
