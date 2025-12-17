@@ -4158,6 +4158,22 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
     func signTypedData(chainId: UInt32, stringifiedTypedData: String) throws  -> HexEncodedData
     
     /**
+     * Deposits tokens into an ERC4626 vault on World Chain.
+     *
+     * This method uses the generic ERC4626 implementation that queries the vault's
+     * asset address and checks the user's balance before creating the transaction.
+     *
+     * # Arguments
+     * - `vault_address`: The address of the ERC4626 vault contract.
+     * - `amount`: The amount of assets to deposit as a stringified integer with the asset's decimals.
+     *
+     * # Errors
+     * - Returns [`TransactionError::PrimitiveError`] if the vault address or amount is invalid.
+     * - Returns [`TransactionError::Generic`] if the transaction submission fails.
+     */
+    func transactionErc4626Deposit(vaultAddress: String, amount: String) async throws  -> HexEncodedData
+    
+    /**
      * Allows executing an ERC-20 token transfer **on World Chain**.
      *
      * # Arguments
@@ -4485,6 +4501,37 @@ open func signTypedData(chainId: UInt32, stringifiedTypedData: String)throws  ->
         FfiConverterString.lower(stringifiedTypedData),$0
     )
 })
+}
+    
+    /**
+     * Deposits tokens into an ERC4626 vault on World Chain.
+     *
+     * This method uses the generic ERC4626 implementation that queries the vault's
+     * asset address and checks the user's balance before creating the transaction.
+     *
+     * # Arguments
+     * - `vault_address`: The address of the ERC4626 vault contract.
+     * - `amount`: The amount of assets to deposit as a stringified integer with the asset's decimals.
+     *
+     * # Errors
+     * - Returns [`TransactionError::PrimitiveError`] if the vault address or amount is invalid.
+     * - Returns [`TransactionError::Generic`] if the transaction submission fails.
+     */
+open func transactionErc4626Deposit(vaultAddress: String, amount: String)async throws  -> HexEncodedData  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_safesmartaccount_transaction_erc4626_deposit(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(vaultAddress),FfiConverterString.lower(amount)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_pointer,
+            completeFunc: ffi_bedrock_rust_future_complete_pointer,
+            freeFunc: ffi_bedrock_rust_future_free_pointer,
+            liftFunc: FfiConverterTypeHexEncodedData_lift,
+            errorHandler: FfiConverterTypeTransactionError_lift
+        )
 }
     
     /**
@@ -7473,9 +7520,10 @@ public enum BackupError: Swift.Error {
     case IoError(String
     )
     /**
-     * Root secret inside backup is invalid.
+     * Root secret is invalid.
      */
-    case InvalidRootSecretError
+    case InvalidRootSecretError(String
+    )
     /**
      * Backup version cannot be detected.
      */
@@ -7582,7 +7630,9 @@ public struct FfiConverterTypeBackupError: FfiConverterRustBuffer {
         case 8: return .IoError(
             try FfiConverterString.read(from: &buf)
             )
-        case 9: return .InvalidRootSecretError
+        case 9: return .InvalidRootSecretError(
+            try FfiConverterString.read(from: &buf)
+            )
         case 10: return .VersionNotDetectedError
         case 11: return .ReadFileNameError
         case 12: return .EncodeRootSecretError
@@ -7659,9 +7709,10 @@ public struct FfiConverterTypeBackupError: FfiConverterRustBuffer {
             FfiConverterString.write(v1, into: &buf)
             
         
-        case .InvalidRootSecretError:
+        case let .InvalidRootSecretError(v1):
             writeInt(&buf, Int32(9))
-        
+            FfiConverterString.write(v1, into: &buf)
+            
         
         case .VersionNotDetectedError:
             writeInt(&buf, Int32(10))
@@ -10338,13 +10389,19 @@ extension TransactionError: Foundation.LocalizedError {
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
- * First byte of the metadata field. Index starts at 1 as 0 is reserved for "not set"
- * NOTE: Ordering should never change, only new values should be added
+ * First byte of the metadata field. Index starts at 1 as 0 is reserved for "not set".
+ * NOTE: Ordering should never change, only new values should be added.
  */
 
 public enum TransferAssociation : UInt8 {
     
+    /**
+     * No association.
+     */
     case none = 1
+    /**
+     * Transfer associated with an XMTP message.
+     */
     case xmtpMessage = 2
 }
 
@@ -11439,6 +11496,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_sign_typed_data() != 43822) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_erc4626_deposit() != 39293) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_transfer() != 61864) {
