@@ -958,12 +958,21 @@ public protocol BackupManagerProtocol: AnyObject, Sendable {
     /**
      * Send a single event by merging with base report and posting to backend.
      *
-     * Sends events to the REST API endpoint `/v1/backup/status`.
+     * Sends events to the REST API endpoint `/v1/backup/events` or `/public/v1/backup/events`.
+     *
+     * # Arguments
+     *
+     * * `kind` - The type of event being reported.
+     * * `success` - Whether the event was successful.
+     * * `error_message` - An optional error message if the event failed.
+     * * `timestamp_iso8601` - The current timestamp in ISO 8601 format.
+     * * `is_public` - Whether the event is being reported unauthenticated (because the user
+     * has not authenticated yet). This is used for log in failures.
      *
      * # Errors
      * Returns an error if HTTP client is not initialized or network/serialization fails.
      */
-    func sendEvent(kind: BackupReportEventKind, success: Bool, errorMessage: String?, timestampIso8601: String) async throws 
+    func sendEvent(kind: BackupReportEventKind, success: Bool, errorMessage: String?, timestampIso8601: String, isPublic: Bool) async throws 
     
     /**
      * **Client Event Streams**. Set the base report attributes for event reports.
@@ -1209,18 +1218,27 @@ open func postDeleteBackup()throws   {try rustCallWithError(FfiConverterTypeBack
     /**
      * Send a single event by merging with base report and posting to backend.
      *
-     * Sends events to the REST API endpoint `/v1/backup/status`.
+     * Sends events to the REST API endpoint `/v1/backup/events` or `/public/v1/backup/events`.
+     *
+     * # Arguments
+     *
+     * * `kind` - The type of event being reported.
+     * * `success` - Whether the event was successful.
+     * * `error_message` - An optional error message if the event failed.
+     * * `timestamp_iso8601` - The current timestamp in ISO 8601 format.
+     * * `is_public` - Whether the event is being reported unauthenticated (because the user
+     * has not authenticated yet). This is used for log in failures.
      *
      * # Errors
      * Returns an error if HTTP client is not initialized or network/serialization fails.
      */
-open func sendEvent(kind: BackupReportEventKind, success: Bool, errorMessage: String?, timestampIso8601: String)async throws   {
+open func sendEvent(kind: BackupReportEventKind, success: Bool, errorMessage: String?, timestampIso8601: String, isPublic: Bool)async throws   {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_backupmanager_send_event(
                     self.uniffiClonePointer(),
-                    FfiConverterTypeBackupReportEventKind_lower(kind),FfiConverterBool.lower(success),FfiConverterOptionString.lower(errorMessage),FfiConverterString.lower(timestampIso8601)
+                    FfiConverterTypeBackupReportEventKind_lower(kind),FfiConverterBool.lower(success),FfiConverterOptionString.lower(errorMessage),FfiConverterString.lower(timestampIso8601),FfiConverterBool.lower(isPublic)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_void,
@@ -11384,7 +11402,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_backupmanager_post_delete_backup() != 63845) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_backupmanager_send_event() != 57515) {
+    if (uniffi_bedrock_checksum_method_backupmanager_send_event() != 59898) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_backupmanager_set_backup_report_attributes() != 12627) {
