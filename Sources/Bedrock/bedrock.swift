@@ -891,14 +891,12 @@ public protocol BackupManagerProtocol: AnyObject, Sendable {
     func createSealedBackupForNewUser(rootSecret: String, factorSecret: String, factorType: FactorType) throws  -> CreatedBackup
     
     /**
-     * **For debugging purposes only**.
-     *
-     * Returns the local manifest from disk as a JSON string.
+     * **For debugging purposes only**. Returns information on the local manifest.
      *
      * # Errors
      * Returns an error if the manifest is not found or cannot be serialized.
      */
-    func debugGetLocalManifest() throws  -> String
+    func debugGetLocalManifest() throws  -> ManifestDebug
     
     /**
      * Decrypts the sealed backup using the factor secret and the encrypted backup keypair. It then unpacks the backup
@@ -1126,15 +1124,13 @@ open func createSealedBackupForNewUser(rootSecret: String, factorSecret: String,
 }
     
     /**
-     * **For debugging purposes only**.
-     *
-     * Returns the local manifest from disk as a JSON string.
+     * **For debugging purposes only**. Returns information on the local manifest.
      *
      * # Errors
      * Returns an error if the manifest is not found or cannot be serialized.
      */
-open func debugGetLocalManifest()throws  -> String  {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeBackupError_lift) {
+open func debugGetLocalManifest()throws  -> ManifestDebug  {
+    return try  FfiConverterTypeManifestDebug_lift(try rustCallWithError(FfiConverterTypeBackupError_lift) {
     uniffi_bedrock_fn_method_backupmanager_debug_get_local_manifest(self.uniffiClonePointer(),$0
     )
 })
@@ -4183,13 +4179,45 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
      *
      * # Arguments
      * - `vault_address`: The address of the ERC4626 vault contract.
-     * - `amount`: The amount of assets to deposit as a stringified integer with the asset's decimals.
+     * - `asset_amount`: The amount of assets to deposit as a stringified integer with the asset's decimals.
      *
      * # Errors
-     * - Returns [`TransactionError::PrimitiveError`] if the vault address or amount is invalid.
+     * - Returns [`TransactionError::PrimitiveError`] if the vault address or `asset_amount` is invalid.
      * - Returns [`TransactionError::Generic`] if the transaction submission fails.
      */
-    func transactionErc4626Deposit(vaultAddress: String, amount: String) async throws  -> HexEncodedData
+    func transactionErc4626Deposit(vaultAddress: String, assetAmount: String) async throws  -> HexEncodedData
+    
+    /**
+     * Redeems shares from an ERC4626 vault on World Chain.
+     *
+     * This method uses the generic ERC4626 implementation that queries the vault's
+     * share balance before creating the transaction.
+     *
+     * # Arguments
+     * - `vault_address`: The address of the ERC4626 vault contract.
+     * - `share_amount`: The amount of shares to redeem as a stringified integer.
+     *
+     * # Errors
+     * - Returns [`TransactionError::PrimitiveError`] if the vault address or `share_amount` is invalid.
+     * - Returns [`TransactionError::Generic`] if the transaction submission fails.
+     */
+    func transactionErc4626Redeem(vaultAddress: String, shareAmount: String) async throws  -> HexEncodedData
+    
+    /**
+     * Withdraws assets from an ERC4626 vault on World Chain.
+     *
+     * This method uses the generic ERC4626 implementation that queries the vault's
+     * share balance and automatically handles share-limited scenarios by switching to redeem.
+     *
+     * # Arguments
+     * - `vault_address`: The address of the ERC4626 vault contract.
+     * - `asset_amount`: The amount of assets to withdraw as a stringified integer with the asset's decimals.
+     *
+     * # Errors
+     * - Returns [`TransactionError::PrimitiveError`] if the vault address or `asset_amount` is invalid.
+     * - Returns [`TransactionError::Generic`] if the transaction submission fails.
+     */
+    func transactionErc4626Withdraw(vaultAddress: String, assetAmount: String) async throws  -> HexEncodedData
     
     /**
      * Allows executing an ERC-20 token transfer **on World Chain**.
@@ -4529,19 +4557,81 @@ open func signTypedData(chainId: UInt32, stringifiedTypedData: String)throws  ->
      *
      * # Arguments
      * - `vault_address`: The address of the ERC4626 vault contract.
-     * - `amount`: The amount of assets to deposit as a stringified integer with the asset's decimals.
+     * - `asset_amount`: The amount of assets to deposit as a stringified integer with the asset's decimals.
      *
      * # Errors
-     * - Returns [`TransactionError::PrimitiveError`] if the vault address or amount is invalid.
+     * - Returns [`TransactionError::PrimitiveError`] if the vault address or `asset_amount` is invalid.
      * - Returns [`TransactionError::Generic`] if the transaction submission fails.
      */
-open func transactionErc4626Deposit(vaultAddress: String, amount: String)async throws  -> HexEncodedData  {
+open func transactionErc4626Deposit(vaultAddress: String, assetAmount: String)async throws  -> HexEncodedData  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_safesmartaccount_transaction_erc4626_deposit(
                     self.uniffiClonePointer(),
-                    FfiConverterString.lower(vaultAddress),FfiConverterString.lower(amount)
+                    FfiConverterString.lower(vaultAddress),FfiConverterString.lower(assetAmount)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_pointer,
+            completeFunc: ffi_bedrock_rust_future_complete_pointer,
+            freeFunc: ffi_bedrock_rust_future_free_pointer,
+            liftFunc: FfiConverterTypeHexEncodedData_lift,
+            errorHandler: FfiConverterTypeTransactionError_lift
+        )
+}
+    
+    /**
+     * Redeems shares from an ERC4626 vault on World Chain.
+     *
+     * This method uses the generic ERC4626 implementation that queries the vault's
+     * share balance before creating the transaction.
+     *
+     * # Arguments
+     * - `vault_address`: The address of the ERC4626 vault contract.
+     * - `share_amount`: The amount of shares to redeem as a stringified integer.
+     *
+     * # Errors
+     * - Returns [`TransactionError::PrimitiveError`] if the vault address or `share_amount` is invalid.
+     * - Returns [`TransactionError::Generic`] if the transaction submission fails.
+     */
+open func transactionErc4626Redeem(vaultAddress: String, shareAmount: String)async throws  -> HexEncodedData  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_safesmartaccount_transaction_erc4626_redeem(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(vaultAddress),FfiConverterString.lower(shareAmount)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_pointer,
+            completeFunc: ffi_bedrock_rust_future_complete_pointer,
+            freeFunc: ffi_bedrock_rust_future_free_pointer,
+            liftFunc: FfiConverterTypeHexEncodedData_lift,
+            errorHandler: FfiConverterTypeTransactionError_lift
+        )
+}
+    
+    /**
+     * Withdraws assets from an ERC4626 vault on World Chain.
+     *
+     * This method uses the generic ERC4626 implementation that queries the vault's
+     * share balance and automatically handles share-limited scenarios by switching to redeem.
+     *
+     * # Arguments
+     * - `vault_address`: The address of the ERC4626 vault contract.
+     * - `asset_amount`: The amount of assets to withdraw as a stringified integer with the asset's decimals.
+     *
+     * # Errors
+     * - Returns [`TransactionError::PrimitiveError`] if the vault address or `asset_amount` is invalid.
+     * - Returns [`TransactionError::Generic`] if the transaction submission fails.
+     */
+open func transactionErc4626Withdraw(vaultAddress: String, assetAmount: String)async throws  -> HexEncodedData  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_safesmartaccount_transaction_erc4626_withdraw(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(vaultAddress),FfiConverterString.lower(assetAmount)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_pointer,
@@ -6146,6 +6236,91 @@ public func FfiConverterTypeHttpHeader_lift(_ buf: RustBuffer) throws -> HttpHea
 #endif
 public func FfiConverterTypeHttpHeader_lower(_ value: HttpHeader) -> RustBuffer {
     return FfiConverterTypeHttpHeader.lower(value)
+}
+
+
+/**
+ * Debug information about the local manifest on disk.
+ */
+public struct ManifestDebug {
+    /**
+     * The stringified JSON representation of the manifest.
+     */
+    public var manifestJson: String
+    /**
+     * The hash of the manifest.
+     */
+    public var manifestHash: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The stringified JSON representation of the manifest.
+         */manifestJson: String, 
+        /**
+         * The hash of the manifest.
+         */manifestHash: String) {
+        self.manifestJson = manifestJson
+        self.manifestHash = manifestHash
+    }
+}
+
+#if compiler(>=6)
+extension ManifestDebug: Sendable {}
+#endif
+
+
+extension ManifestDebug: Equatable, Hashable {
+    public static func ==(lhs: ManifestDebug, rhs: ManifestDebug) -> Bool {
+        if lhs.manifestJson != rhs.manifestJson {
+            return false
+        }
+        if lhs.manifestHash != rhs.manifestHash {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(manifestJson)
+        hasher.combine(manifestHash)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeManifestDebug: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ManifestDebug {
+        return
+            try ManifestDebug(
+                manifestJson: FfiConverterString.read(from: &buf), 
+                manifestHash: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ManifestDebug, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.manifestJson, into: &buf)
+        FfiConverterString.write(value.manifestHash, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeManifestDebug_lift(_ buf: RustBuffer) throws -> ManifestDebug {
+    return try FfiConverterTypeManifestDebug.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeManifestDebug_lower(_ value: ManifestDebug) -> RustBuffer {
+    return FfiConverterTypeManifestDebug.lower(value)
 }
 
 
@@ -11390,7 +11565,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_backupmanager_create_sealed_backup_for_new_user() != 51722) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_backupmanager_debug_get_local_manifest() != 29117) {
+    if (uniffi_bedrock_checksum_method_backupmanager_debug_get_local_manifest() != 40195) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_backupmanager_decrypt_and_unpack_sealed_backup() != 30187) {
@@ -11516,7 +11691,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_safesmartaccount_sign_typed_data() != 43822) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_erc4626_deposit() != 39293) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_erc4626_deposit() != 53691) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_erc4626_redeem() != 18504) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_erc4626_withdraw() != 48031) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_transfer() != 61864) {
