@@ -422,6 +422,22 @@ fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterInt32: FfiConverterPrimitive {
+    typealias FfiType = Int32
+    typealias SwiftType = Int32
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Int32 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: Int32, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
     typealias FfiType = UInt64
     typealias SwiftType = UInt64
@@ -1961,6 +1977,320 @@ public func FfiConverterTypeBedrockConfig_lift(_ pointer: UnsafeMutableRawPointe
 #endif
 public func FfiConverterTypeBedrockConfig_lower(_ value: BedrockConfig) -> UnsafeMutableRawPointer {
     return FfiConverterTypeBedrockConfig.lower(value)
+}
+
+
+
+
+
+
+/**
+ * A trait which is implemented by native World App to provide a key-value cache that is persisted in the device.
+ *
+ * The key-value store can be used to cache data which is not sensitive. Android uses `SharedPreferences`
+ * to store the data and iOS uses `UserDefaults`.
+ *
+ * This is explicitly **not a secure store!** Do not store anything sensitive here. Furthermore, there are no integrity guarantees.
+ * The cache may be tampered with, corrupted or otherwise modified at any time.
+ *
+ * Only string storage is supported because Android's `SharedPreferences` doesn't support raw bytes to allow us more customization.
+ * JSON may be used to serialize more complex data.
+ *
+ * The native implementation will always prefix all keys with `oxide/` to avoid collisions with other values. This is invisible to Oxide.
+ */
+public protocol DeviceKeyValueStore: AnyObject, Sendable {
+    
+    /**
+     * Get a value from the key-value store
+     *
+     * # Errors
+     * - `KeyValueStoreError::KeyNotFound` if the key is not found
+     * - `KeyValueStoreError::ParsingFailure` if something goes wrong while parsing the value
+     */
+    func get(key: String) throws  -> String
+    
+    /**
+     * Set a value in the key-value store
+     *
+     * # Errors
+     * - `KeyValueStoreError::UpdateFailure` if something goes wrong while updating the value
+     */
+    func set(key: String, value: String) throws 
+    
+    /**
+     * Delete a value from the key-value store
+     *
+     * # Errors
+     * - `KeyValueStoreError::KeyNotFound` if the key is not found
+     * - `KeyValueStoreError::UpdateFailure` if something goes wrong while updating the value
+     */
+    func delete(key: String) throws 
+    
+}
+/**
+ * A trait which is implemented by native World App to provide a key-value cache that is persisted in the device.
+ *
+ * The key-value store can be used to cache data which is not sensitive. Android uses `SharedPreferences`
+ * to store the data and iOS uses `UserDefaults`.
+ *
+ * This is explicitly **not a secure store!** Do not store anything sensitive here. Furthermore, there are no integrity guarantees.
+ * The cache may be tampered with, corrupted or otherwise modified at any time.
+ *
+ * Only string storage is supported because Android's `SharedPreferences` doesn't support raw bytes to allow us more customization.
+ * JSON may be used to serialize more complex data.
+ *
+ * The native implementation will always prefix all keys with `oxide/` to avoid collisions with other values. This is invisible to Oxide.
+ */
+open class DeviceKeyValueStoreImpl: DeviceKeyValueStore, @unchecked Sendable {
+    fileprivate let pointer: UnsafeMutableRawPointer!
+
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoPointer {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
+        self.pointer = pointer
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noPointer: NoPointer) {
+        self.pointer = nil
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
+        return try! rustCall { uniffi_bedrock_fn_clone_devicekeyvaluestore(self.pointer, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        guard let pointer = pointer else {
+            return
+        }
+
+        try! rustCall { uniffi_bedrock_fn_free_devicekeyvaluestore(pointer, $0) }
+    }
+
+    
+
+    
+    /**
+     * Get a value from the key-value store
+     *
+     * # Errors
+     * - `KeyValueStoreError::KeyNotFound` if the key is not found
+     * - `KeyValueStoreError::ParsingFailure` if something goes wrong while parsing the value
+     */
+open func get(key: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeKeyValueStoreError_lift) {
+    uniffi_bedrock_fn_method_devicekeyvaluestore_get(self.uniffiClonePointer(),
+        FfiConverterString.lower(key),$0
+    )
+})
+}
+    
+    /**
+     * Set a value in the key-value store
+     *
+     * # Errors
+     * - `KeyValueStoreError::UpdateFailure` if something goes wrong while updating the value
+     */
+open func set(key: String, value: String)throws   {try rustCallWithError(FfiConverterTypeKeyValueStoreError_lift) {
+    uniffi_bedrock_fn_method_devicekeyvaluestore_set(self.uniffiClonePointer(),
+        FfiConverterString.lower(key),
+        FfiConverterString.lower(value),$0
+    )
+}
+}
+    
+    /**
+     * Delete a value from the key-value store
+     *
+     * # Errors
+     * - `KeyValueStoreError::KeyNotFound` if the key is not found
+     * - `KeyValueStoreError::UpdateFailure` if something goes wrong while updating the value
+     */
+open func delete(key: String)throws   {try rustCallWithError(FfiConverterTypeKeyValueStoreError_lift) {
+    uniffi_bedrock_fn_method_devicekeyvaluestore_delete(self.uniffiClonePointer(),
+        FfiConverterString.lower(key),$0
+    )
+}
+}
+    
+
+}
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceDeviceKeyValueStore {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    //
+    // This creates 1-element array, since this seems to be the only way to construct a const
+    // pointer that we can pass to the Rust code.
+    static let vtable: [UniffiVTableCallbackInterfaceDeviceKeyValueStore] = [UniffiVTableCallbackInterfaceDeviceKeyValueStore(
+        get: { (
+            uniffiHandle: UInt64,
+            key: RustBuffer,
+            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> String in
+                guard let uniffiObj = try? FfiConverterTypeDeviceKeyValueStore.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try uniffiObj.get(
+                     key: try FfiConverterString.lift(key)
+                )
+            }
+
+            
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterString.lower($0) }
+            uniffiTraitInterfaceCallWithError(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn,
+                lowerError: FfiConverterTypeKeyValueStoreError_lower
+            )
+        },
+        set: { (
+            uniffiHandle: UInt64,
+            key: RustBuffer,
+            value: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterTypeDeviceKeyValueStore.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try uniffiObj.set(
+                     key: try FfiConverterString.lift(key),
+                     value: try FfiConverterString.lift(value)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCallWithError(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn,
+                lowerError: FfiConverterTypeKeyValueStoreError_lower
+            )
+        },
+        delete: { (
+            uniffiHandle: UInt64,
+            key: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterTypeDeviceKeyValueStore.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try uniffiObj.delete(
+                     key: try FfiConverterString.lift(key)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCallWithError(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn,
+                lowerError: FfiConverterTypeKeyValueStoreError_lower
+            )
+        },
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            let result = try? FfiConverterTypeDeviceKeyValueStore.handleMap.remove(handle: uniffiHandle)
+            if result == nil {
+                print("Uniffi callback interface DeviceKeyValueStore: handle missing in uniffiFree")
+            }
+        }
+    )]
+}
+
+private func uniffiCallbackInitDeviceKeyValueStore() {
+    uniffi_bedrock_fn_init_callback_vtable_devicekeyvaluestore(UniffiCallbackInterfaceDeviceKeyValueStore.vtable)
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDeviceKeyValueStore: FfiConverter {
+    fileprivate static let handleMap = UniffiHandleMap<DeviceKeyValueStore>()
+
+    typealias FfiType = UnsafeMutableRawPointer
+    typealias SwiftType = DeviceKeyValueStore
+
+    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> DeviceKeyValueStore {
+        return DeviceKeyValueStoreImpl(unsafeFromRawPointer: pointer)
+    }
+
+    public static func lower(_ value: DeviceKeyValueStore) -> UnsafeMutableRawPointer {
+        guard let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: handleMap.insert(obj: value))) else {
+            fatalError("Cast to UnsafeMutableRawPointer failed")
+        }
+        return ptr
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DeviceKeyValueStore {
+        let v: UInt64 = try readInt(&buf)
+        // The Rust code won't compile if a pointer won't fit in a UInt64.
+        // We have to go via `UInt` because that's the thing that's the size of a pointer.
+        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
+        if (ptr == nil) {
+            throw UniffiInternalError.unexpectedNullPointer
+        }
+        return try lift(ptr!)
+    }
+
+    public static func write(_ value: DeviceKeyValueStore, into buf: inout [UInt8]) {
+        // This fiddling is because `Int` is the thing that's the same size as a pointer.
+        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
+        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDeviceKeyValueStore_lift(_ pointer: UnsafeMutableRawPointer) throws -> DeviceKeyValueStore {
+    return try FfiConverterTypeDeviceKeyValueStore.lift(pointer)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDeviceKeyValueStore_lower(_ value: DeviceKeyValueStore) -> UnsafeMutableRawPointer {
+    return FfiConverterTypeDeviceKeyValueStore.lower(value)
 }
 
 
@@ -3830,6 +4160,572 @@ public func FfiConverterTypeManifestManager_lift(_ pointer: UnsafeMutableRawPoin
 #endif
 public func FfiConverterTypeManifestManager_lower(_ value: ManifestManager) -> UnsafeMutableRawPointer {
     return FfiConverterTypeManifestManager.lower(value)
+}
+
+
+
+
+
+
+/**
+ * Controller that orchestrates migration execution
+ *
+ * ## Storage Architecture
+ *
+ * Each migration's state is stored independently in the [`DeviceKeyValueStore`](crate::device::DeviceKeyValueStore) using
+ * a namespaced key pattern: `migration:{migration_id}`.
+ *
+ * For example:
+ * - `migration:worldId.credentials.poh.refresh.v1`
+ * - `migration:worldId.credentials.nfc.refresh.v1`
+ *
+ * This approach ensures:
+ * - **Scalability**: No size limits on the total number of migrations
+ * - **Isolation**: Each migration's state is independent and can be managed separately
+ * - **Platform compatibility**: Avoids hitting single-key size limits in `SharedPreferences` (Android) and `UserDefaults` (iOS)
+ *
+ * Each key stores a JSON-serialized `MigrationRecord` containing execution state,
+ * timestamps, and error information.
+ */
+public protocol MigrationControllerProtocol: AnyObject, Sendable {
+    
+    /**
+     * Run all registered migrations
+     *
+     * This is an async call that may take several seconds depending on network
+     * conditions and the number of migrations to process.
+     *
+     * UniFFI handles the async runtime automatically via the `async_runtime = "tokio"` attribute.
+     *
+     * # Concurrency
+     *
+     * This method is **thread-safe** with fail-fast behavior. A global lock ensures only one
+     * migration run can execute at a time across all `MigrationController` instances in the process.
+     *
+     * If another migration is already in progress when this method is called, it will return
+     * immediately with an `InvalidOperation` error rather than waiting.
+     *
+     * # Errors
+     *
+     * Returns `MigrationError::InvalidOperation` if another migration run is already in progress.
+     * Returns other errors for migration execution failures (see `MigrationRunSummary` for details).
+     */
+    func runMigrations() async throws  -> MigrationRunSummary
+    
+}
+/**
+ * Controller that orchestrates migration execution
+ *
+ * ## Storage Architecture
+ *
+ * Each migration's state is stored independently in the [`DeviceKeyValueStore`](crate::device::DeviceKeyValueStore) using
+ * a namespaced key pattern: `migration:{migration_id}`.
+ *
+ * For example:
+ * - `migration:worldId.credentials.poh.refresh.v1`
+ * - `migration:worldId.credentials.nfc.refresh.v1`
+ *
+ * This approach ensures:
+ * - **Scalability**: No size limits on the total number of migrations
+ * - **Isolation**: Each migration's state is independent and can be managed separately
+ * - **Platform compatibility**: Avoids hitting single-key size limits in `SharedPreferences` (Android) and `UserDefaults` (iOS)
+ *
+ * Each key stores a JSON-serialized `MigrationRecord` containing execution state,
+ * timestamps, and error information.
+ */
+open class MigrationController: MigrationControllerProtocol, @unchecked Sendable {
+    fileprivate let pointer: UnsafeMutableRawPointer!
+
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoPointer {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
+        self.pointer = pointer
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noPointer: NoPointer) {
+        self.pointer = nil
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
+        return try! rustCall { uniffi_bedrock_fn_clone_migrationcontroller(self.pointer, $0) }
+    }
+    /**
+     * Create a new [`MigrationController`]
+     * Processors are registered internally
+     */
+public convenience init(kvStore: DeviceKeyValueStore, processors: [MigrationProcessor]) {
+    let pointer =
+        try! rustCall() {
+    uniffi_bedrock_fn_constructor_migrationcontroller_new(
+        FfiConverterTypeDeviceKeyValueStore_lower(kvStore),
+        FfiConverterSequenceTypeMigrationProcessor.lower(processors),$0
+    )
+}
+    self.init(unsafeFromRawPointer: pointer)
+}
+
+    deinit {
+        guard let pointer = pointer else {
+            return
+        }
+
+        try! rustCall { uniffi_bedrock_fn_free_migrationcontroller(pointer, $0) }
+    }
+
+    
+
+    
+    /**
+     * Run all registered migrations
+     *
+     * This is an async call that may take several seconds depending on network
+     * conditions and the number of migrations to process.
+     *
+     * UniFFI handles the async runtime automatically via the `async_runtime = "tokio"` attribute.
+     *
+     * # Concurrency
+     *
+     * This method is **thread-safe** with fail-fast behavior. A global lock ensures only one
+     * migration run can execute at a time across all `MigrationController` instances in the process.
+     *
+     * If another migration is already in progress when this method is called, it will return
+     * immediately with an `InvalidOperation` error rather than waiting.
+     *
+     * # Errors
+     *
+     * Returns `MigrationError::InvalidOperation` if another migration run is already in progress.
+     * Returns other errors for migration execution failures (see `MigrationRunSummary` for details).
+     */
+open func runMigrations()async throws  -> MigrationRunSummary  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_migrationcontroller_run_migrations(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
+            completeFunc: ffi_bedrock_rust_future_complete_rust_buffer,
+            freeFunc: ffi_bedrock_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeMigrationRunSummary_lift,
+            errorHandler: FfiConverterTypeMigrationError_lift
+        )
+}
+    
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMigrationController: FfiConverter {
+
+    typealias FfiType = UnsafeMutableRawPointer
+    typealias SwiftType = MigrationController
+
+    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> MigrationController {
+        return MigrationController(unsafeFromRawPointer: pointer)
+    }
+
+    public static func lower(_ value: MigrationController) -> UnsafeMutableRawPointer {
+        return value.uniffiClonePointer()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MigrationController {
+        let v: UInt64 = try readInt(&buf)
+        // The Rust code won't compile if a pointer won't fit in a UInt64.
+        // We have to go via `UInt` because that's the thing that's the size of a pointer.
+        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
+        if (ptr == nil) {
+            throw UniffiInternalError.unexpectedNullPointer
+        }
+        return try lift(ptr!)
+    }
+
+    public static func write(_ value: MigrationController, into buf: inout [UInt8]) {
+        // This fiddling is because `Int` is the thing that's the same size as a pointer.
+        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
+        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMigrationController_lift(_ pointer: UnsafeMutableRawPointer) throws -> MigrationController {
+    return try FfiConverterTypeMigrationController.lift(pointer)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMigrationController_lower(_ value: MigrationController) -> UnsafeMutableRawPointer {
+    return FfiConverterTypeMigrationController.lower(value)
+}
+
+
+
+
+
+
+/**
+ * Trait that all migration processors must implement
+ */
+public protocol MigrationProcessor: AnyObject, Sendable {
+    
+    /**
+     * Unique identifier for this migration (e.g., "worldid.account.bootstrap.v1")
+     * The version should be included in the ID itself (e.g., ".v1", ".v2")
+     */
+    func migrationId()  -> String
+    
+    /**
+     * Check if this migration is applicable
+     *
+     * This method should check **actual state** (e.g., does v4 credential exist?)
+     * to determine if the migration needs to run. This ensures the system is
+     * truly idempotent and handles edge cases gracefully.
+     *
+     *
+     * # Returns
+     * - `Ok(true)` if the migration should run
+     * - `Ok(false)` if the migration should be skipped
+     * - `Err(_)` if unable to determine (migration will be skipped with error logged)
+     */
+    func isApplicable() async throws  -> Bool
+    
+    /**
+     * Execute the migration
+     * Called by the controller when the migration is ready to run
+     */
+    func execute() async throws  -> ProcessorResult
+    
+}
+/**
+ * Trait that all migration processors must implement
+ */
+open class MigrationProcessorImpl: MigrationProcessor, @unchecked Sendable {
+    fileprivate let pointer: UnsafeMutableRawPointer!
+
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoPointer {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
+        self.pointer = pointer
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noPointer: NoPointer) {
+        self.pointer = nil
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
+        return try! rustCall { uniffi_bedrock_fn_clone_migrationprocessor(self.pointer, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        guard let pointer = pointer else {
+            return
+        }
+
+        try! rustCall { uniffi_bedrock_fn_free_migrationprocessor(pointer, $0) }
+    }
+
+    
+
+    
+    /**
+     * Unique identifier for this migration (e.g., "worldid.account.bootstrap.v1")
+     * The version should be included in the ID itself (e.g., ".v1", ".v2")
+     */
+open func migrationId() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_bedrock_fn_method_migrationprocessor_migration_id(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+    /**
+     * Check if this migration is applicable
+     *
+     * This method should check **actual state** (e.g., does v4 credential exist?)
+     * to determine if the migration needs to run. This ensures the system is
+     * truly idempotent and handles edge cases gracefully.
+     *
+     *
+     * # Returns
+     * - `Ok(true)` if the migration should run
+     * - `Ok(false)` if the migration should be skipped
+     * - `Err(_)` if unable to determine (migration will be skipped with error logged)
+     */
+open func isApplicable()async throws  -> Bool  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_migrationprocessor_is_applicable(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_i8,
+            completeFunc: ffi_bedrock_rust_future_complete_i8,
+            freeFunc: ffi_bedrock_rust_future_free_i8,
+            liftFunc: FfiConverterBool.lift,
+            errorHandler: FfiConverterTypeMigrationError_lift
+        )
+}
+    
+    /**
+     * Execute the migration
+     * Called by the controller when the migration is ready to run
+     */
+open func execute()async throws  -> ProcessorResult  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_migrationprocessor_execute(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
+            completeFunc: ffi_bedrock_rust_future_complete_rust_buffer,
+            freeFunc: ffi_bedrock_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeProcessorResult_lift,
+            errorHandler: FfiConverterTypeMigrationError_lift
+        )
+}
+    
+
+}
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceMigrationProcessor {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    //
+    // This creates 1-element array, since this seems to be the only way to construct a const
+    // pointer that we can pass to the Rust code.
+    static let vtable: [UniffiVTableCallbackInterfaceMigrationProcessor] = [UniffiVTableCallbackInterfaceMigrationProcessor(
+        migrationId: { (
+            uniffiHandle: UInt64,
+            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> String in
+                guard let uniffiObj = try? FfiConverterTypeMigrationProcessor.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.migrationId(
+                )
+            }
+
+            
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterString.lower($0) }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        isApplicable: { (
+            uniffiHandle: UInt64,
+            uniffiFutureCallback: @escaping UniffiForeignFutureCompleteI8,
+            uniffiCallbackData: UInt64,
+            uniffiOutReturn: UnsafeMutablePointer<UniffiForeignFuture>
+        ) in
+            let makeCall = {
+                () async throws -> Bool in
+                guard let uniffiObj = try? FfiConverterTypeMigrationProcessor.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try await uniffiObj.isApplicable(
+                )
+            }
+
+            let uniffiHandleSuccess = { (returnValue: Bool) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureStructI8(
+                        returnValue: FfiConverterBool.lower(returnValue),
+                        callStatus: RustCallStatus()
+                    )
+                )
+            }
+            let uniffiHandleError = { (statusCode, errorBuf) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureStructI8(
+                        returnValue: 0,
+                        callStatus: RustCallStatus(code: statusCode, errorBuf: errorBuf)
+                    )
+                )
+            }
+            let uniffiForeignFuture = uniffiTraitInterfaceCallAsyncWithError(
+                makeCall: makeCall,
+                handleSuccess: uniffiHandleSuccess,
+                handleError: uniffiHandleError,
+                lowerError: FfiConverterTypeMigrationError_lower
+            )
+            uniffiOutReturn.pointee = uniffiForeignFuture
+        },
+        execute: { (
+            uniffiHandle: UInt64,
+            uniffiFutureCallback: @escaping UniffiForeignFutureCompleteRustBuffer,
+            uniffiCallbackData: UInt64,
+            uniffiOutReturn: UnsafeMutablePointer<UniffiForeignFuture>
+        ) in
+            let makeCall = {
+                () async throws -> ProcessorResult in
+                guard let uniffiObj = try? FfiConverterTypeMigrationProcessor.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try await uniffiObj.execute(
+                )
+            }
+
+            let uniffiHandleSuccess = { (returnValue: ProcessorResult) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureStructRustBuffer(
+                        returnValue: FfiConverterTypeProcessorResult_lower(returnValue),
+                        callStatus: RustCallStatus()
+                    )
+                )
+            }
+            let uniffiHandleError = { (statusCode, errorBuf) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureStructRustBuffer(
+                        returnValue: RustBuffer.empty(),
+                        callStatus: RustCallStatus(code: statusCode, errorBuf: errorBuf)
+                    )
+                )
+            }
+            let uniffiForeignFuture = uniffiTraitInterfaceCallAsyncWithError(
+                makeCall: makeCall,
+                handleSuccess: uniffiHandleSuccess,
+                handleError: uniffiHandleError,
+                lowerError: FfiConverterTypeMigrationError_lower
+            )
+            uniffiOutReturn.pointee = uniffiForeignFuture
+        },
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            let result = try? FfiConverterTypeMigrationProcessor.handleMap.remove(handle: uniffiHandle)
+            if result == nil {
+                print("Uniffi callback interface MigrationProcessor: handle missing in uniffiFree")
+            }
+        }
+    )]
+}
+
+private func uniffiCallbackInitMigrationProcessor() {
+    uniffi_bedrock_fn_init_callback_vtable_migrationprocessor(UniffiCallbackInterfaceMigrationProcessor.vtable)
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMigrationProcessor: FfiConverter {
+    fileprivate static let handleMap = UniffiHandleMap<MigrationProcessor>()
+
+    typealias FfiType = UnsafeMutableRawPointer
+    typealias SwiftType = MigrationProcessor
+
+    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> MigrationProcessor {
+        return MigrationProcessorImpl(unsafeFromRawPointer: pointer)
+    }
+
+    public static func lower(_ value: MigrationProcessor) -> UnsafeMutableRawPointer {
+        guard let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: handleMap.insert(obj: value))) else {
+            fatalError("Cast to UnsafeMutableRawPointer failed")
+        }
+        return ptr
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MigrationProcessor {
+        let v: UInt64 = try readInt(&buf)
+        // The Rust code won't compile if a pointer won't fit in a UInt64.
+        // We have to go via `UInt` because that's the thing that's the size of a pointer.
+        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
+        if (ptr == nil) {
+            throw UniffiInternalError.unexpectedNullPointer
+        }
+        return try lift(ptr!)
+    }
+
+    public static func write(_ value: MigrationProcessor, into buf: inout [UInt8]) {
+        // This fiddling is because `Int` is the thing that's the same size as a pointer.
+        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
+        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMigrationProcessor_lift(_ pointer: UnsafeMutableRawPointer) throws -> MigrationProcessor {
+    return try FfiConverterTypeMigrationProcessor.lift(pointer)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMigrationProcessor_lower(_ value: MigrationProcessor) -> UnsafeMutableRawPointer {
+    return FfiConverterTypeMigrationProcessor.lower(value)
 }
 
 
@@ -6321,6 +7217,147 @@ public func FfiConverterTypeManifestDebug_lift(_ buf: RustBuffer) throws -> Mani
 #endif
 public func FfiConverterTypeManifestDebug_lower(_ value: ManifestDebug) -> RustBuffer {
     return FfiConverterTypeManifestDebug.lower(value)
+}
+
+
+/**
+ * Summary of a migration run
+ */
+public struct MigrationRunSummary {
+    /**
+     * Total number of migrations attempted
+     */
+    public var total: Int32
+    /**
+     * Number of migrations that succeeded
+     */
+    public var succeeded: Int32
+    /**
+     * Number of migrations that failed but can be retried
+     */
+    public var failedRetryable: Int32
+    /**
+     * Number of migrations that failed with terminal errors (won't retry)
+     */
+    public var failedTerminal: Int32
+    /**
+     * Number of migrations blocked pending user action
+     */
+    public var blocked: Int32
+    /**
+     * Number of migrations that were skipped (already completed or not applicable)
+     */
+    public var skipped: Int32
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Total number of migrations attempted
+         */total: Int32, 
+        /**
+         * Number of migrations that succeeded
+         */succeeded: Int32, 
+        /**
+         * Number of migrations that failed but can be retried
+         */failedRetryable: Int32, 
+        /**
+         * Number of migrations that failed with terminal errors (won't retry)
+         */failedTerminal: Int32, 
+        /**
+         * Number of migrations blocked pending user action
+         */blocked: Int32, 
+        /**
+         * Number of migrations that were skipped (already completed or not applicable)
+         */skipped: Int32) {
+        self.total = total
+        self.succeeded = succeeded
+        self.failedRetryable = failedRetryable
+        self.failedTerminal = failedTerminal
+        self.blocked = blocked
+        self.skipped = skipped
+    }
+}
+
+#if compiler(>=6)
+extension MigrationRunSummary: Sendable {}
+#endif
+
+
+extension MigrationRunSummary: Equatable, Hashable {
+    public static func ==(lhs: MigrationRunSummary, rhs: MigrationRunSummary) -> Bool {
+        if lhs.total != rhs.total {
+            return false
+        }
+        if lhs.succeeded != rhs.succeeded {
+            return false
+        }
+        if lhs.failedRetryable != rhs.failedRetryable {
+            return false
+        }
+        if lhs.failedTerminal != rhs.failedTerminal {
+            return false
+        }
+        if lhs.blocked != rhs.blocked {
+            return false
+        }
+        if lhs.skipped != rhs.skipped {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(total)
+        hasher.combine(succeeded)
+        hasher.combine(failedRetryable)
+        hasher.combine(failedTerminal)
+        hasher.combine(blocked)
+        hasher.combine(skipped)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMigrationRunSummary: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MigrationRunSummary {
+        return
+            try MigrationRunSummary(
+                total: FfiConverterInt32.read(from: &buf), 
+                succeeded: FfiConverterInt32.read(from: &buf), 
+                failedRetryable: FfiConverterInt32.read(from: &buf), 
+                failedTerminal: FfiConverterInt32.read(from: &buf), 
+                blocked: FfiConverterInt32.read(from: &buf), 
+                skipped: FfiConverterInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: MigrationRunSummary, into buf: inout [UInt8]) {
+        FfiConverterInt32.write(value.total, into: &buf)
+        FfiConverterInt32.write(value.succeeded, into: &buf)
+        FfiConverterInt32.write(value.failedRetryable, into: &buf)
+        FfiConverterInt32.write(value.failedTerminal, into: &buf)
+        FfiConverterInt32.write(value.blocked, into: &buf)
+        FfiConverterInt32.write(value.skipped, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMigrationRunSummary_lift(_ buf: RustBuffer) throws -> MigrationRunSummary {
+    return try FfiConverterTypeMigrationRunSummary.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMigrationRunSummary_lower(_ value: MigrationRunSummary) -> RustBuffer {
+    return FfiConverterTypeMigrationRunSummary.lower(value)
 }
 
 
@@ -9378,6 +10415,115 @@ extension HttpMethod: Equatable, Hashable {}
 
 
 
+
+/**
+ * Errors that can occur when interacting with the device key-value store
+ */
+public enum KeyValueStoreError: Swift.Error {
+
+    
+    
+    /**
+     * The requested key was not found in the store
+     */
+    case KeyNotFound
+    /**
+     * Failed to parse the value retrieved from the store
+     */
+    case ParsingFailure
+    /**
+     * Failed to update the value in the store
+     */
+    case UpdateFailure
+    /**
+     * An unexpected error occurred in the foreign callback
+     */
+    case UnexpectedUniFfiCallbackError(String
+    )
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeKeyValueStoreError: FfiConverterRustBuffer {
+    typealias SwiftType = KeyValueStoreError
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> KeyValueStoreError {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        
+
+        
+        case 1: return .KeyNotFound
+        case 2: return .ParsingFailure
+        case 3: return .UpdateFailure
+        case 4: return .UnexpectedUniFfiCallbackError(
+            try FfiConverterString.read(from: &buf)
+            )
+
+         default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: KeyValueStoreError, into buf: inout [UInt8]) {
+        switch value {
+
+        
+
+        
+        
+        case .KeyNotFound:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .ParsingFailure:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .UpdateFailure:
+            writeInt(&buf, Int32(3))
+        
+        
+        case let .UnexpectedUniFfiCallbackError(v1):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(v1, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeKeyValueStoreError_lift(_ buf: RustBuffer) throws -> KeyValueStoreError {
+    return try FfiConverterTypeKeyValueStoreError.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeKeyValueStoreError_lower(_ value: KeyValueStoreError) -> RustBuffer {
+    return FfiConverterTypeKeyValueStoreError.lower(value)
+}
+
+
+extension KeyValueStoreError: Equatable, Hashable {}
+
+
+
+
+extension KeyValueStoreError: Foundation.LocalizedError {
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+}
+
+
+
+
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
@@ -9485,6 +10631,156 @@ public func FfiConverterTypeLogLevel_lower(_ value: LogLevel) -> RustBuffer {
 extension LogLevel: Equatable, Hashable {}
 
 
+
+
+
+
+
+/**
+ * Error types for migration operations
+ */
+public enum MigrationError: Swift.Error {
+
+    
+    
+    /**
+     * Invalid operation error
+     */
+    case InvalidOperation(String
+    )
+    /**
+     * JSON serialization/deserialization error
+     */
+    case SerdeJsonError(String
+    )
+    /**
+     * Device key-value store error
+     */
+    case DeviceKeyValueStoreError(KeyValueStoreError
+    )
+    /**
+     * Unexpected UniFFI callback error
+     */
+    case UnexpectedUniFfiCallbackError(String
+    )
+    /**
+     * A generic error that can wrap any anyhow error.
+     */
+    case Generic(
+        /**
+         * The error message from the wrapped error.
+         */errorMessage: String
+    )
+    /**
+     * Filesystem operation error.
+     */
+    case FileSystem(FileSystemError
+    )
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMigrationError: FfiConverterRustBuffer {
+    typealias SwiftType = MigrationError
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MigrationError {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        
+
+        
+        case 1: return .InvalidOperation(
+            try FfiConverterString.read(from: &buf)
+            )
+        case 2: return .SerdeJsonError(
+            try FfiConverterString.read(from: &buf)
+            )
+        case 3: return .DeviceKeyValueStoreError(
+            try FfiConverterTypeKeyValueStoreError.read(from: &buf)
+            )
+        case 4: return .UnexpectedUniFfiCallbackError(
+            try FfiConverterString.read(from: &buf)
+            )
+        case 5: return .Generic(
+            errorMessage: try FfiConverterString.read(from: &buf)
+            )
+        case 6: return .FileSystem(
+            try FfiConverterTypeFileSystemError.read(from: &buf)
+            )
+
+         default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: MigrationError, into buf: inout [UInt8]) {
+        switch value {
+
+        
+
+        
+        
+        case let .InvalidOperation(v1):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .SerdeJsonError(v1):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .DeviceKeyValueStoreError(v1):
+            writeInt(&buf, Int32(3))
+            FfiConverterTypeKeyValueStoreError.write(v1, into: &buf)
+            
+        
+        case let .UnexpectedUniFfiCallbackError(v1):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .Generic(errorMessage):
+            writeInt(&buf, Int32(5))
+            FfiConverterString.write(errorMessage, into: &buf)
+            
+        
+        case let .FileSystem(v1):
+            writeInt(&buf, Int32(6))
+            FfiConverterTypeFileSystemError.write(v1, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMigrationError_lift(_ buf: RustBuffer) throws -> MigrationError {
+    return try FfiConverterTypeMigrationError.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMigrationError_lower(_ value: MigrationError) -> RustBuffer {
+    return FfiConverterTypeMigrationError.lower(value)
+}
+
+
+extension MigrationError: Equatable, Hashable {}
+
+
+
+
+extension MigrationError: Foundation.LocalizedError {
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+}
 
 
 
@@ -9785,6 +11081,135 @@ extension PrimitiveError: Foundation.LocalizedError {
         String(reflecting: self)
     }
 }
+
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * Result of executing a migration processor
+ */
+
+public enum ProcessorResult {
+    
+    /**
+     * Migration succeeded
+     */
+    case success
+    /**
+     * Migration failed but can be retried
+     */
+    case retryable(
+        /**
+         * Error code for categorizing the failure
+         */errorCode: String, 
+        /**
+         * Human-readable error message
+         */errorMessage: String, 
+        /**
+         * Optional delay in milliseconds before retrying
+         */retryAfterMs: Int64?
+    )
+    /**
+     * Migration failed with terminal error (won't retry)
+     */
+    case terminal(
+        /**
+         * Error code for categorizing the failure
+         */errorCode: String, 
+        /**
+         * Human-readable error message
+         */errorMessage: String
+    )
+    /**
+     * Migration blocked pending user action
+     */
+    case blockedUserAction(
+        /**
+         * Reason why the migration is blocked
+         */reason: String
+    )
+}
+
+
+#if compiler(>=6)
+extension ProcessorResult: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeProcessorResult: FfiConverterRustBuffer {
+    typealias SwiftType = ProcessorResult
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ProcessorResult {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .success
+        
+        case 2: return .retryable(errorCode: try FfiConverterString.read(from: &buf), errorMessage: try FfiConverterString.read(from: &buf), retryAfterMs: try FfiConverterOptionInt64.read(from: &buf)
+        )
+        
+        case 3: return .terminal(errorCode: try FfiConverterString.read(from: &buf), errorMessage: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 4: return .blockedUserAction(reason: try FfiConverterString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ProcessorResult, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .success:
+            writeInt(&buf, Int32(1))
+        
+        
+        case let .retryable(errorCode,errorMessage,retryAfterMs):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(errorCode, into: &buf)
+            FfiConverterString.write(errorMessage, into: &buf)
+            FfiConverterOptionInt64.write(retryAfterMs, into: &buf)
+            
+        
+        case let .terminal(errorCode,errorMessage):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(errorCode, into: &buf)
+            FfiConverterString.write(errorMessage, into: &buf)
+            
+        
+        case let .blockedUserAction(reason):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(reason, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProcessorResult_lift(_ buf: RustBuffer) throws -> ProcessorResult {
+    return try FfiConverterTypeProcessorResult.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProcessorResult_lower(_ value: ProcessorResult) -> RustBuffer {
+    return FfiConverterTypeProcessorResult.lower(value)
+}
+
+
+extension ProcessorResult: Equatable, Hashable {}
+
+
 
 
 
@@ -10877,6 +12302,30 @@ fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionInt64: FfiConverterRustBuffer {
+    typealias SwiftType = Int64?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterInt64.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionBool: FfiConverterRustBuffer {
     typealias SwiftType = Bool?
 
@@ -11110,6 +12559,31 @@ fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterString.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeMigrationProcessor: FfiConverterRustBuffer {
+    typealias SwiftType = [MigrationProcessor]
+
+    public static func write(_ value: [MigrationProcessor], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeMigrationProcessor.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [MigrationProcessor] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [MigrationProcessor]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeMigrationProcessor.read(from: &buf))
         }
         return seq
     }
@@ -11604,6 +13078,15 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_bedrockconfig_os() != 26504) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_method_devicekeyvaluestore_get() != 28620) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_devicekeyvaluestore_set() != 59884) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_devicekeyvaluestore_delete() != 115) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_method_enclaveattestationverifier_verify_attestation_document_and_encrypt() != 42656) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -11665,6 +13148,18 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_manifestmanager_store_file() != 35335) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_migrationcontroller_run_migrations() != 18577) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_migrationprocessor_migration_id() != 60370) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_migrationprocessor_is_applicable() != 44337) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_migrationprocessor_execute() != 49157) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_rootkey_derive_public_backup_account_id() != 53782) {
@@ -11778,6 +13273,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_constructor_manifestmanager_new() != 11752) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_constructor_migrationcontroller_new() != 17534) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_constructor_rootkey_from_json() != 2594) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -11796,8 +13294,10 @@ private let initializationResult: InitializationResult = {
 
     uniffiCallbackInitAuthenticatedHttpClient()
     uniffiCallbackInitBackupServiceApi()
+    uniffiCallbackInitDeviceKeyValueStore()
     uniffiCallbackInitFileSystem()
     uniffiCallbackInitLogger()
+    uniffiCallbackInitMigrationProcessor()
     return InitializationResult.ok
 }()
 
