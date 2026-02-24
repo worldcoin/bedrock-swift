@@ -4396,6 +4396,21 @@ public func FfiConverterTypeMigrationController_lower(_ value: MigrationControll
 
 /**
  * Trait that all migration processors must implement
+ *
+ * # Timeouts and Cancellation Safety
+ *
+ * Both [`is_applicable`](Self::is_applicable) and [`execute`](Self::execute) are subject to timeouts
+ * (20 seconds in production). When a timeout occurs, the future is dropped and the migration
+ * is marked as failed (for `execute`) or skipped (for `is_applicable`).
+ *
+ * **IMPORTANT**: Implementations MUST be cancellation-safe:
+ *
+ * - **DO NOT** spawn background tasks using `tokio::spawn`, `std::thread::spawn`, or similar
+ * that will continue running after the timeout
+ * - **DO NOT** use blocking operations or FFI calls without proper cleanup
+ * - **ENSURE** all work stops when the future is dropped (cooperative cancellation)
+ * - **MAKE** migrations idempotent so partial execution can be safely retried
+
  */
 public protocol MigrationProcessor: AnyObject, Sendable {
     
@@ -4412,7 +4427,6 @@ public protocol MigrationProcessor: AnyObject, Sendable {
      * to determine if the migration needs to run. This ensures the system is
      * truly idempotent and handles edge cases gracefully.
      *
-     *
      * # Returns
      * - `Ok(true)` if the migration should run
      * - `Ok(false)` if the migration should be skipped
@@ -4422,13 +4436,27 @@ public protocol MigrationProcessor: AnyObject, Sendable {
     
     /**
      * Execute the migration
-     * Called by the controller when the migration is ready to run
      */
     func execute() async throws  -> ProcessorResult
     
 }
 /**
  * Trait that all migration processors must implement
+ *
+ * # Timeouts and Cancellation Safety
+ *
+ * Both [`is_applicable`](Self::is_applicable) and [`execute`](Self::execute) are subject to timeouts
+ * (20 seconds in production). When a timeout occurs, the future is dropped and the migration
+ * is marked as failed (for `execute`) or skipped (for `is_applicable`).
+ *
+ * **IMPORTANT**: Implementations MUST be cancellation-safe:
+ *
+ * - **DO NOT** spawn background tasks using `tokio::spawn`, `std::thread::spawn`, or similar
+ * that will continue running after the timeout
+ * - **DO NOT** use blocking operations or FFI calls without proper cleanup
+ * - **ENSURE** all work stops when the future is dropped (cooperative cancellation)
+ * - **MAKE** migrations idempotent so partial execution can be safely retried
+
  */
 open class MigrationProcessorImpl: MigrationProcessor, @unchecked Sendable {
     fileprivate let pointer: UnsafeMutableRawPointer!
@@ -4500,7 +4528,6 @@ open func migrationId() -> String  {
      * to determine if the migration needs to run. This ensures the system is
      * truly idempotent and handles edge cases gracefully.
      *
-     *
      * # Returns
      * - `Ok(true)` if the migration should run
      * - `Ok(false)` if the migration should be skipped
@@ -4525,7 +4552,6 @@ open func isApplicable()async throws  -> Bool  {
     
     /**
      * Execute the migration
-     * Called by the controller when the migration is ready to run
      */
 open func execute()async throws  -> ProcessorResult  {
     return
@@ -4971,6 +4997,27 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
     func personalSign(chainId: UInt32, message: String) throws  -> HexEncodedData
     
     /**
+     * Signs and sends a bundler-sponsored `UserOperation` to an external bundler RPC endpoint.
+     *
+     * This method takes an existing `UserOperation`, converts it to a bundler-sponsored
+     * format (zeroed paymaster and fee fields), signs it, and submits it directly to
+     * the provided bundler RPC URL via `eth_sendUserOperation`.
+     *
+     * In a bundler-sponsored user operation, the bundler itself covers all gas costs.
+     * The operation's core fields (`sender`, `nonce`, `callData`, `callGasLimit`,
+     * `verificationGasLimit`) are preserved from the original operation.
+     *
+     * # Arguments
+     * - `user_operation`: The user operation to convert and send.
+     * - `rpc_url`: The absolute URL of the bundler RPC endpoint (e.g. `https://bundler.example.com/rpc`).
+     *
+     * # Errors
+     * - Returns [`TransactionError::PrimitiveError`] if the user operation is invalid.
+     * - Returns [`TransactionError::Generic`] if signing or submission fails.
+     */
+    func sendBundlerSponsoredUserOperation(userOperation: UnparsedUserOperation, rpcUrl: String) async throws  -> HexEncodedData
+    
+    /**
      * Crafts and signs a 4337 user operation on behalf of the Safe Smart Account.
      *
      * # Arguments
@@ -5114,6 +5161,28 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
      * - Returns [`TransactionError::Generic`] if the transaction submission fails.
      */
     func transactionErc4626Withdraw(vaultAddress: String, assetAmount: String) async throws  -> HexEncodedData
+    
+    /**
+     * Sets a Permit2 allowance for a spender on a specific token via the `IAllowanceTransfer.approve` method.
+     *
+     * This calls the Permit2 contract's `approve(token, spender, amount, expiration)` function,
+     * granting the spender permission to transfer tokens via Permit2's allowance-based mechanism.
+     *
+     * Note: The Safe must have already approved the Permit2 contract on the ERC-20 token
+     * (via a standard ERC-20 `approve`) before the spender can use the Permit2 allowance.
+     *
+     * # Arguments
+     * - `token_address`: The ERC-20 token address to set the allowance for.
+     * - `spender_address`: The address being granted permission to transfer tokens via Permit2.
+     * - `amount`: The maximum amount of tokens the spender can transfer, as a stringified `uint160`.
+     * - `expiration`: The timestamp after which the allowance expires, as a stringified `uint48`.
+     *
+     * # Errors
+     * - Will throw a parsing error if any of the provided attributes are invalid.
+     * - Will throw an RPC error if the transaction submission fails.
+     * - Will throw an error if the global HTTP client has not been initialized.
+     */
+    func transactionPermit2Approve(tokenAddress: String, spenderAddress: String, amount: String, expiration: String) async throws  -> HexEncodedData
     
     /**
      * Allows executing an ERC-20 token transfer **on World Chain**.
@@ -5318,6 +5387,42 @@ open func personalSign(chainId: UInt32, message: String)throws  -> HexEncodedDat
         FfiConverterString.lower(message),$0
     )
 })
+}
+    
+    /**
+     * Signs and sends a bundler-sponsored `UserOperation` to an external bundler RPC endpoint.
+     *
+     * This method takes an existing `UserOperation`, converts it to a bundler-sponsored
+     * format (zeroed paymaster and fee fields), signs it, and submits it directly to
+     * the provided bundler RPC URL via `eth_sendUserOperation`.
+     *
+     * In a bundler-sponsored user operation, the bundler itself covers all gas costs.
+     * The operation's core fields (`sender`, `nonce`, `callData`, `callGasLimit`,
+     * `verificationGasLimit`) are preserved from the original operation.
+     *
+     * # Arguments
+     * - `user_operation`: The user operation to convert and send.
+     * - `rpc_url`: The absolute URL of the bundler RPC endpoint (e.g. `https://bundler.example.com/rpc`).
+     *
+     * # Errors
+     * - Returns [`TransactionError::PrimitiveError`] if the user operation is invalid.
+     * - Returns [`TransactionError::Generic`] if signing or submission fails.
+     */
+open func sendBundlerSponsoredUserOperation(userOperation: UnparsedUserOperation, rpcUrl: String)async throws  -> HexEncodedData  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_safesmartaccount_send_bundler_sponsored_user_operation(
+                    self.uniffiClonePointer(),
+                    FfiConverterTypeUnparsedUserOperation_lower(userOperation),FfiConverterString.lower(rpcUrl)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_pointer,
+            completeFunc: ffi_bedrock_rust_future_complete_pointer,
+            freeFunc: ffi_bedrock_rust_future_free_pointer,
+            liftFunc: FfiConverterTypeHexEncodedData_lift,
+            errorHandler: FfiConverterTypeTransactionError_lift
+        )
 }
     
     /**
@@ -5528,6 +5633,43 @@ open func transactionErc4626Withdraw(vaultAddress: String, assetAmount: String)a
                 uniffi_bedrock_fn_method_safesmartaccount_transaction_erc4626_withdraw(
                     self.uniffiClonePointer(),
                     FfiConverterString.lower(vaultAddress),FfiConverterString.lower(assetAmount)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_pointer,
+            completeFunc: ffi_bedrock_rust_future_complete_pointer,
+            freeFunc: ffi_bedrock_rust_future_free_pointer,
+            liftFunc: FfiConverterTypeHexEncodedData_lift,
+            errorHandler: FfiConverterTypeTransactionError_lift
+        )
+}
+    
+    /**
+     * Sets a Permit2 allowance for a spender on a specific token via the `IAllowanceTransfer.approve` method.
+     *
+     * This calls the Permit2 contract's `approve(token, spender, amount, expiration)` function,
+     * granting the spender permission to transfer tokens via Permit2's allowance-based mechanism.
+     *
+     * Note: The Safe must have already approved the Permit2 contract on the ERC-20 token
+     * (via a standard ERC-20 `approve`) before the spender can use the Permit2 allowance.
+     *
+     * # Arguments
+     * - `token_address`: The ERC-20 token address to set the allowance for.
+     * - `spender_address`: The address being granted permission to transfer tokens via Permit2.
+     * - `amount`: The maximum amount of tokens the spender can transfer, as a stringified `uint160`.
+     * - `expiration`: The timestamp after which the allowance expires, as a stringified `uint48`.
+     *
+     * # Errors
+     * - Will throw a parsing error if any of the provided attributes are invalid.
+     * - Will throw an RPC error if the transaction submission fails.
+     * - Will throw an error if the global HTTP client has not been initialized.
+     */
+open func transactionPermit2Approve(tokenAddress: String, spenderAddress: String, amount: String, expiration: String)async throws  -> HexEncodedData  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_safesmartaccount_transaction_permit2_approve(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(tokenAddress),FfiConverterString.lower(spenderAddress),FfiConverterString.lower(amount),FfiConverterString.lower(expiration)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_pointer,
@@ -7241,10 +7383,6 @@ public struct MigrationRunSummary {
      */
     public var failedTerminal: Int32
     /**
-     * Number of migrations blocked pending user action
-     */
-    public var blocked: Int32
-    /**
      * Number of migrations that were skipped (already completed or not applicable)
      */
     public var skipped: Int32
@@ -7265,16 +7403,12 @@ public struct MigrationRunSummary {
          * Number of migrations that failed with terminal errors (won't retry)
          */failedTerminal: Int32, 
         /**
-         * Number of migrations blocked pending user action
-         */blocked: Int32, 
-        /**
          * Number of migrations that were skipped (already completed or not applicable)
          */skipped: Int32) {
         self.total = total
         self.succeeded = succeeded
         self.failedRetryable = failedRetryable
         self.failedTerminal = failedTerminal
-        self.blocked = blocked
         self.skipped = skipped
     }
 }
@@ -7298,9 +7432,6 @@ extension MigrationRunSummary: Equatable, Hashable {
         if lhs.failedTerminal != rhs.failedTerminal {
             return false
         }
-        if lhs.blocked != rhs.blocked {
-            return false
-        }
         if lhs.skipped != rhs.skipped {
             return false
         }
@@ -7312,7 +7443,6 @@ extension MigrationRunSummary: Equatable, Hashable {
         hasher.combine(succeeded)
         hasher.combine(failedRetryable)
         hasher.combine(failedTerminal)
-        hasher.combine(blocked)
         hasher.combine(skipped)
     }
 }
@@ -7330,7 +7460,6 @@ public struct FfiConverterTypeMigrationRunSummary: FfiConverterRustBuffer {
                 succeeded: FfiConverterInt32.read(from: &buf), 
                 failedRetryable: FfiConverterInt32.read(from: &buf), 
                 failedTerminal: FfiConverterInt32.read(from: &buf), 
-                blocked: FfiConverterInt32.read(from: &buf), 
                 skipped: FfiConverterInt32.read(from: &buf)
         )
     }
@@ -7340,7 +7469,6 @@ public struct FfiConverterTypeMigrationRunSummary: FfiConverterRustBuffer {
         FfiConverterInt32.write(value.succeeded, into: &buf)
         FfiConverterInt32.write(value.failedRetryable, into: &buf)
         FfiConverterInt32.write(value.failedTerminal, into: &buf)
-        FfiConverterInt32.write(value.blocked, into: &buf)
         FfiConverterInt32.write(value.skipped, into: &buf)
     }
 }
@@ -11122,14 +11250,6 @@ public enum ProcessorResult {
          * Human-readable error message
          */errorMessage: String
     )
-    /**
-     * Migration blocked pending user action
-     */
-    case blockedUserAction(
-        /**
-         * Reason why the migration is blocked
-         */reason: String
-    )
 }
 
 
@@ -11155,9 +11275,6 @@ public struct FfiConverterTypeProcessorResult: FfiConverterRustBuffer {
         case 3: return .terminal(errorCode: try FfiConverterString.read(from: &buf), errorMessage: try FfiConverterString.read(from: &buf)
         )
         
-        case 4: return .blockedUserAction(reason: try FfiConverterString.read(from: &buf)
-        )
-        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -11181,11 +11298,6 @@ public struct FfiConverterTypeProcessorResult: FfiConverterRustBuffer {
             writeInt(&buf, Int32(3))
             FfiConverterString.write(errorCode, into: &buf)
             FfiConverterString.write(errorMessage, into: &buf)
-            
-        
-        case let .blockedUserAction(reason):
-            writeInt(&buf, Int32(4))
-            FfiConverterString.write(reason, into: &buf)
             
         }
     }
@@ -11375,6 +11487,14 @@ public enum RpcError: Swift.Error {
      */
     case HttpClientNotInitialized
     /**
+     * The provided URL is invalid or uses a disallowed scheme
+     */
+    case InvalidUrl(
+        /**
+         * Description of why the URL was rejected
+         */errorMessage: String
+    )
+    /**
      * Primitive operation error
      */
     case PrimitiveError(String
@@ -11425,16 +11545,19 @@ public struct FfiConverterTypeRpcError: FfiConverterRustBuffer {
             errorMessage: try FfiConverterString.read(from: &buf)
             )
         case 5: return .HttpClientNotInitialized
-        case 6: return .PrimitiveError(
-            try FfiConverterString.read(from: &buf)
-            )
-        case 7: return .SafeSmartAccountError(
-            try FfiConverterString.read(from: &buf)
-            )
-        case 8: return .Generic(
+        case 6: return .InvalidUrl(
             errorMessage: try FfiConverterString.read(from: &buf)
             )
-        case 9: return .FileSystem(
+        case 7: return .PrimitiveError(
+            try FfiConverterString.read(from: &buf)
+            )
+        case 8: return .SafeSmartAccountError(
+            try FfiConverterString.read(from: &buf)
+            )
+        case 9: return .Generic(
+            errorMessage: try FfiConverterString.read(from: &buf)
+            )
+        case 10: return .FileSystem(
             try FfiConverterTypeFileSystemError.read(from: &buf)
             )
 
@@ -11473,23 +11596,28 @@ public struct FfiConverterTypeRpcError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(5))
         
         
-        case let .PrimitiveError(v1):
+        case let .InvalidUrl(errorMessage):
             writeInt(&buf, Int32(6))
-            FfiConverterString.write(v1, into: &buf)
+            FfiConverterString.write(errorMessage, into: &buf)
             
         
-        case let .SafeSmartAccountError(v1):
+        case let .PrimitiveError(v1):
             writeInt(&buf, Int32(7))
             FfiConverterString.write(v1, into: &buf)
             
         
-        case let .Generic(errorMessage):
+        case let .SafeSmartAccountError(v1):
             writeInt(&buf, Int32(8))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .Generic(errorMessage):
+            writeInt(&buf, Int32(9))
             FfiConverterString.write(errorMessage, into: &buf)
             
         
         case let .FileSystem(v1):
-            writeInt(&buf, Int32(9))
+            writeInt(&buf, Int32(10))
             FfiConverterTypeFileSystemError.write(v1, into: &buf)
             
         }
@@ -13156,10 +13284,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_migrationprocessor_migration_id() != 60370) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_migrationprocessor_is_applicable() != 44337) {
+    if (uniffi_bedrock_checksum_method_migrationprocessor_is_applicable() != 46747) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_migrationprocessor_execute() != 49157) {
+    if (uniffi_bedrock_checksum_method_migrationprocessor_execute() != 31783) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_rootkey_derive_public_backup_account_id() != 53782) {
@@ -13172,6 +13300,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_personal_sign() != 21352) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_safesmartaccount_send_bundler_sponsored_user_operation() != 18134) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_sign_4337_op() != 61690) {
@@ -13193,6 +13324,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_erc4626_withdraw() != 48031) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_permit2_approve() != 39860) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_transfer() != 61864) {
