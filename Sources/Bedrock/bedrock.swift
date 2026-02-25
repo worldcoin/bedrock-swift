@@ -5150,27 +5150,6 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
     func signTypedData(chainId: UInt32, stringifiedTypedData: String) throws  -> HexEncodedData
     
     /**
-     * Signs and sends a bundler-sponsored `UserOperation` to an external bundler RPC endpoint.
-     *
-     * This method takes an existing `UserOperation`, converts it to a bundler-sponsored
-     * format (zeroed paymaster and fee fields), signs it, and submits it directly to
-     * the provided bundler RPC URL via `eth_sendUserOperation`.
-     *
-     * In a bundler-sponsored user operation, the bundler itself covers all gas costs.
-     * The operation's core fields (`sender`, `nonce`, `callData`, `callGasLimit`,
-     * `verificationGasLimit`) are preserved from the original operation.
-     *
-     * # Arguments
-     * - `user_operation`: The user operation to convert and send.
-     * - `rpc_url`: The absolute URL of the bundler RPC endpoint (e.g. `https://bundler.example.com/rpc`).
-     *
-     * # Errors
-     * - Returns [`TransactionError::PrimitiveError`] if the user operation is invalid.
-     * - Returns [`TransactionError::Generic`] if signing or submission fails.
-     */
-    func sendBundlerSponsoredUserOperation(userOperation: UnparsedUserOperation, rpcUrl: String) async throws  -> HexEncodedData
-    
-    /**
      * Deposits tokens into an ERC4626 vault on World Chain.
      *
      * This method uses the generic ERC4626 implementation that queries the vault's
@@ -5341,6 +5320,27 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
      * - The RPC returns an error response.
      */
     func waGetUserOperationReceipt(userOpHash: String) async throws  -> WaGetUserOperationReceiptResponse
+    
+    /**
+     * Signs and sends a bundler-sponsored `UserOperation` to an external bundler RPC endpoint.
+     *
+     * This method takes an existing `UserOperation`, converts it to a bundler-sponsored
+     * format (zeroed paymaster and fee fields), signs it, and submits it directly to
+     * the provided bundler RPC URL via `eth_sendUserOperation`.
+     *
+     * In a bundler-sponsored user operation, the bundler itself covers all gas costs.
+     * The operation's core fields (`sender`, `nonce`, `callData`, `callGasLimit`,
+     * `verificationGasLimit`) are preserved from the original operation.
+     *
+     * # Arguments
+     * - `user_operation`: The user operation to convert and send.
+     * - `rpc_url`: The absolute URL of the bundler RPC endpoint (e.g. `https://bundler.example.com/rpc`).
+     *
+     * # Errors
+     * - Returns [`TransactionError::PrimitiveError`] if the user operation is invalid.
+     * - Returns [`TransactionError::Generic`] if signing or submission fails.
+     */
+    func sendBundlerSponsoredUserOperation(userOperation: UnparsedUserOperation, rpcUrl: String) async throws  -> HexEncodedData
     
 }
 /**
@@ -5574,42 +5574,6 @@ open func signTypedData(chainId: UInt32, stringifiedTypedData: String)throws  ->
         FfiConverterString.lower(stringifiedTypedData),$0
     )
 })
-}
-    
-    /**
-     * Signs and sends a bundler-sponsored `UserOperation` to an external bundler RPC endpoint.
-     *
-     * This method takes an existing `UserOperation`, converts it to a bundler-sponsored
-     * format (zeroed paymaster and fee fields), signs it, and submits it directly to
-     * the provided bundler RPC URL via `eth_sendUserOperation`.
-     *
-     * In a bundler-sponsored user operation, the bundler itself covers all gas costs.
-     * The operation's core fields (`sender`, `nonce`, `callData`, `callGasLimit`,
-     * `verificationGasLimit`) are preserved from the original operation.
-     *
-     * # Arguments
-     * - `user_operation`: The user operation to convert and send.
-     * - `rpc_url`: The absolute URL of the bundler RPC endpoint (e.g. `https://bundler.example.com/rpc`).
-     *
-     * # Errors
-     * - Returns [`TransactionError::PrimitiveError`] if the user operation is invalid.
-     * - Returns [`TransactionError::Generic`] if signing or submission fails.
-     */
-open func sendBundlerSponsoredUserOperation(userOperation: UnparsedUserOperation, rpcUrl: String)async throws  -> HexEncodedData  {
-    return
-        try  await uniffiRustCallAsync(
-            rustFutureFunc: {
-                uniffi_bedrock_fn_method_safesmartaccount_send_bundler_sponsored_user_operation(
-                    self.uniffiCloneHandle(),
-                    FfiConverterTypeUnparsedUserOperation_lower(userOperation),FfiConverterString.lower(rpcUrl)
-                )
-            },
-            pollFunc: ffi_bedrock_rust_future_poll_u64,
-            completeFunc: ffi_bedrock_rust_future_complete_u64,
-            freeFunc: ffi_bedrock_rust_future_free_u64,
-            liftFunc: FfiConverterTypeHexEncodedData_lift,
-            errorHandler: FfiConverterTypeTransactionError_lift
-        )
 }
     
     /**
@@ -5946,6 +5910,42 @@ open func waGetUserOperationReceipt(userOpHash: String)async throws  -> WaGetUse
             freeFunc: ffi_bedrock_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeWaGetUserOperationReceiptResponse_lift,
             errorHandler: FfiConverterTypeRpcError_lift
+        )
+}
+    
+    /**
+     * Signs and sends a bundler-sponsored `UserOperation` to an external bundler RPC endpoint.
+     *
+     * This method takes an existing `UserOperation`, converts it to a bundler-sponsored
+     * format (zeroed paymaster and fee fields), signs it, and submits it directly to
+     * the provided bundler RPC URL via `eth_sendUserOperation`.
+     *
+     * In a bundler-sponsored user operation, the bundler itself covers all gas costs.
+     * The operation's core fields (`sender`, `nonce`, `callData`, `callGasLimit`,
+     * `verificationGasLimit`) are preserved from the original operation.
+     *
+     * # Arguments
+     * - `user_operation`: The user operation to convert and send.
+     * - `rpc_url`: The absolute URL of the bundler RPC endpoint (e.g. `https://bundler.example.com/rpc`).
+     *
+     * # Errors
+     * - Returns [`TransactionError::PrimitiveError`] if the user operation is invalid.
+     * - Returns [`TransactionError::Generic`] if signing or submission fails.
+     */
+open func sendBundlerSponsoredUserOperation(userOperation: UnparsedUserOperation, rpcUrl: String)async throws  -> HexEncodedData  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_safesmartaccount_send_bundler_sponsored_user_operation(
+                    self.uniffiCloneHandle(),
+                    FfiConverterTypeUnparsedUserOperation_lower(userOperation),FfiConverterString.lower(rpcUrl)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_u64,
+            completeFunc: ffi_bedrock_rust_future_complete_u64,
+            freeFunc: ffi_bedrock_rust_future_free_u64,
+            liftFunc: FfiConverterTypeHexEncodedData_lift,
+            errorHandler: FfiConverterTypeTransactionError_lift
         )
 }
     
@@ -12641,6 +12641,17 @@ public func setLogger(logger: Logger)  {try! rustCall() {
 }
 }
 /**
+ * Returns the ERC-4337 v0.7 `EntryPoint` contract address used by World App.
+ *
+ * Contract reference: <https://github.com/eth-infinitism/account-abstraction/blob/v0.7.0/contracts/core/EntryPoint.sol>
+ */
+public func entrypointAddress() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_bedrock_fn_func_entrypoint_address($0
+    )
+})
+}
+/**
  * Allows to compute the predicted wallet address from the EOA address **only for newly deployed Safe Smart Accounts**.
  *
  * This function uses an algorithm that's specific for v1.4.1 Safe contracts. This function
@@ -12658,6 +12669,34 @@ public func computeWalletAddressForFreshAccount(eoaAddress: String)throws  -> St
         FfiConverterString.lower(eoaAddress),$0
     )
 })
+}
+/**
+ * Verifies that a bundler RPC endpoint supports the v0.7 `EntryPoint` used by World App.
+ *
+ * Calls `eth_supportedEntryPoints` on the given URL and checks that the response
+ * contains the expected `EntryPoint` address.
+ *
+ * # Errors
+ *
+ * Returns an error if:
+ * - The URL is invalid or uses a disallowed scheme
+ * - The HTTP request fails
+ * - The RPC returns an error response
+ * - The expected `EntryPoint` is not in the returned list
+ */
+public func verifyBundlerRpcEntrypoint(rpcUrl: String)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_func_verify_bundler_rpc_entrypoint(FfiConverterString.lower(rpcUrl)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_void,
+            completeFunc: ffi_bedrock_rust_future_complete_void,
+            freeFunc: ffi_bedrock_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeRpcError_lift
+        )
 }
 
 private enum InitializationResult {
@@ -12705,7 +12744,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_func_set_logger() != 7633) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_func_entrypoint_address() != 51207) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_func_compute_wallet_address_for_fresh_account() != 57053) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_func_verify_bundler_rpc_entrypoint() != 40638) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_backupmanager_add_new_factor() != 55596) {
@@ -12897,9 +12942,6 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_safesmartaccount_sign_typed_data() != 12862) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_send_bundler_sponsored_user_operation() != 34007) {
-        return InitializationResult.apiChecksumMismatch
-    }
     if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_erc4626_deposit() != 11491) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -12931,6 +12973,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_wa_get_user_operation_receipt() != 35736) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_safesmartaccount_send_bundler_sponsored_user_operation() != 62094) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_backupmanager_new() != 27832) {
