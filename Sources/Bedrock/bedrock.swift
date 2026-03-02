@@ -4244,6 +4244,26 @@ public func FfiConverterTypeManifestManager_lower(_ value: ManifestManager) -> U
 public protocol MigrationControllerProtocol: AnyObject, Sendable {
     
     /**
+     * Delete all migration records from the key-value store.
+     *
+     * **Developer/testing use only.** This resets all migration state so that
+     * migrations will run again from scratch on the next `run_migrations` call.
+     *
+     * Records that don't exist yet are silently skipped.
+     *
+     * # Errors
+     *
+     * Returns `MigrationError::InvalidOperation` if a migration run is currently in progress.
+     * Returns `MigrationError::DeviceKeyValueStoreError` if the underlying store fails.
+     *
+     * # Concurrency
+     *
+     * Acquires the global migration lock to prevent deleting records while
+     * migrations are in progress.
+     */
+    func deleteAllRecords() throws  -> Int32
+    
+    /**
      * Run all registered migrations
      *
      * This is an async call that may take several seconds depending on network
@@ -4327,15 +4347,20 @@ open class MigrationController: MigrationControllerProtocol, @unchecked Sendable
         return try! rustCall { uniffi_bedrock_fn_clone_migrationcontroller(self.handle, $0) }
     }
     /**
-     * Create a new [`MigrationController`]
-     * Processors are registered internally
+     * Create a new [`MigrationController`] with default processors and optional additional ones.
+     *
+     * Default processors (loaded automatically):
+     * - [`Permit2ApprovalProcessor`]: Ensures max ERC20 approval to Permit2 on `WorldChain`
+     *
+     * Additional processors passed via `additional_processors` are appended after the defaults.
      */
-public convenience init(kvStore: DeviceKeyValueStore, processors: [MigrationProcessor]) {
+public convenience init(kvStore: DeviceKeyValueStore, safeAccount: SafeSmartAccount, additionalProcessors: [MigrationProcessor]) {
     let handle =
         try! rustCall() {
     uniffi_bedrock_fn_constructor_migrationcontroller_new(
         FfiConverterTypeDeviceKeyValueStore_lower(kvStore),
-        FfiConverterSequenceTypeMigrationProcessor.lower(processors),$0
+        FfiConverterTypeSafeSmartAccount_lower(safeAccount),
+        FfiConverterSequenceTypeMigrationProcessor.lower(additionalProcessors),$0
     )
 }
     self.init(unsafeFromHandle: handle)
@@ -4352,6 +4377,32 @@ public convenience init(kvStore: DeviceKeyValueStore, processors: [MigrationProc
 
     
 
+    
+    /**
+     * Delete all migration records from the key-value store.
+     *
+     * **Developer/testing use only.** This resets all migration state so that
+     * migrations will run again from scratch on the next `run_migrations` call.
+     *
+     * Records that don't exist yet are silently skipped.
+     *
+     * # Errors
+     *
+     * Returns `MigrationError::InvalidOperation` if a migration run is currently in progress.
+     * Returns `MigrationError::DeviceKeyValueStoreError` if the underlying store fails.
+     *
+     * # Concurrency
+     *
+     * Acquires the global migration lock to prevent deleting records while
+     * migrations are in progress.
+     */
+open func deleteAllRecords()throws  -> Int32  {
+    return try  FfiConverterInt32.lift(try rustCallWithError(FfiConverterTypeMigrationError_lift) {
+    uniffi_bedrock_fn_method_migrationcontroller_delete_all_records(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
     
     /**
      * Run all registered migrations
@@ -5260,6 +5311,55 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
     func transactionTransfer(tokenAddress: String, toAddress: String, amount: String, transferAssociation: TransferAssociation?) async throws  -> HexEncodedData
     
     /**
+     * Migrates assets from a USD Vault to an ERC4626 vault on World Chain.
+     *
+     * This method performs a complex migration process that includes:
+     * 1. Fetching the user's sDAI balance from the USD Vault
+     * 2. Creating a Permit2 signature for secure token transfer
+     * 3. Executing a multi-step transaction bundle:
+     * - Redeeming sDAI for USDC from the USD Vault
+     * - Approving the new vault to spend USDC
+     * - Depositing USDC into the new ERC4626 vault
+     *
+     * The entire process is executed atomically using a `MultiSend` transaction bundle.
+     *
+     * # Arguments
+     * - `usd_vault_address`: The address of the USD Vault contract to migrate from.
+     * - `erc4626_vault_address`: The address of the ERC4626 vault contract to migrate to.
+     *
+     * # Errors
+     * - Returns [`TransactionError::PrimitiveError`] if any of the vault addresses are invalid.
+     * - Returns [`TransactionError::Generic`] if fetching the sDAI balance fails.
+     * - Returns [`TransactionError::Generic`] if the Permit2 signature creation fails.
+     * - Returns [`TransactionError::Generic`] if the migration transaction bundle creation fails.
+     * - Returns [`TransactionError::Generic`] if the transaction submission fails.
+     * - Returns [`TransactionError::Generic`] if the global HTTP client has not been initialized.
+     */
+    func transactionUsdLegacyVaultMigrate(legacyVaultAddress: String, erc4626VaultAddress: String) async throws  -> HexEncodedData
+    
+    /**
+     * Migrates assets from a `WLDVault` to an ERC4626 vault on World Chain.
+     *
+     * This method withdraws all WLD tokens from the legacy `WLDVault` and deposits the
+     * equivalent amount into a new ERC4626-compliant vault. The migration process is
+     * atomic and executed as a single transaction bundle.
+     *
+     * Note: After migration, the user may have some dust WLD tokens left due to
+     * rounding differences in the conversion process.
+     *
+     * # Arguments
+     * - `wld_vault_address`: The address of the `WLDVault` contract to migrate from.
+     * - `erc4626_vault_address`: The address of the new ERC4626 vault contract to migrate to.
+     *
+     * # Errors
+     * - Returns [`TransactionError::PrimitiveError`] if any of the vault addresses are invalid.
+     * - Returns [`TransactionError::Generic`] if the migration transaction creation fails.
+     * - Returns [`TransactionError::Generic`] if the transaction submission fails.
+     * - Returns [`TransactionError::Generic`] if the global HTTP client has not been initialized.
+     */
+    func transactionWldLegacyVaultMigrate(legacyVaultAddress: String, erc4626VaultAddress: String) async throws  -> HexEncodedData
+    
+    /**
      * Claims a campaign gift using the `WorldCampaignManager` contract.
      *
      * # Errors
@@ -5751,6 +5851,85 @@ open func transactionTransfer(tokenAddress: String, toAddress: String, amount: S
                 uniffi_bedrock_fn_method_safesmartaccount_transaction_transfer(
                     self.uniffiCloneHandle(),
                     FfiConverterString.lower(tokenAddress),FfiConverterString.lower(toAddress),FfiConverterString.lower(amount),FfiConverterOptionTypeTransferAssociation.lower(transferAssociation)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_u64,
+            completeFunc: ffi_bedrock_rust_future_complete_u64,
+            freeFunc: ffi_bedrock_rust_future_free_u64,
+            liftFunc: FfiConverterTypeHexEncodedData_lift,
+            errorHandler: FfiConverterTypeTransactionError_lift
+        )
+}
+    
+    /**
+     * Migrates assets from a USD Vault to an ERC4626 vault on World Chain.
+     *
+     * This method performs a complex migration process that includes:
+     * 1. Fetching the user's sDAI balance from the USD Vault
+     * 2. Creating a Permit2 signature for secure token transfer
+     * 3. Executing a multi-step transaction bundle:
+     * - Redeeming sDAI for USDC from the USD Vault
+     * - Approving the new vault to spend USDC
+     * - Depositing USDC into the new ERC4626 vault
+     *
+     * The entire process is executed atomically using a `MultiSend` transaction bundle.
+     *
+     * # Arguments
+     * - `usd_vault_address`: The address of the USD Vault contract to migrate from.
+     * - `erc4626_vault_address`: The address of the ERC4626 vault contract to migrate to.
+     *
+     * # Errors
+     * - Returns [`TransactionError::PrimitiveError`] if any of the vault addresses are invalid.
+     * - Returns [`TransactionError::Generic`] if fetching the sDAI balance fails.
+     * - Returns [`TransactionError::Generic`] if the Permit2 signature creation fails.
+     * - Returns [`TransactionError::Generic`] if the migration transaction bundle creation fails.
+     * - Returns [`TransactionError::Generic`] if the transaction submission fails.
+     * - Returns [`TransactionError::Generic`] if the global HTTP client has not been initialized.
+     */
+open func transactionUsdLegacyVaultMigrate(legacyVaultAddress: String, erc4626VaultAddress: String)async throws  -> HexEncodedData  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_safesmartaccount_transaction_usd_legacy_vault_migrate(
+                    self.uniffiCloneHandle(),
+                    FfiConverterString.lower(legacyVaultAddress),FfiConverterString.lower(erc4626VaultAddress)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_u64,
+            completeFunc: ffi_bedrock_rust_future_complete_u64,
+            freeFunc: ffi_bedrock_rust_future_free_u64,
+            liftFunc: FfiConverterTypeHexEncodedData_lift,
+            errorHandler: FfiConverterTypeTransactionError_lift
+        )
+}
+    
+    /**
+     * Migrates assets from a `WLDVault` to an ERC4626 vault on World Chain.
+     *
+     * This method withdraws all WLD tokens from the legacy `WLDVault` and deposits the
+     * equivalent amount into a new ERC4626-compliant vault. The migration process is
+     * atomic and executed as a single transaction bundle.
+     *
+     * Note: After migration, the user may have some dust WLD tokens left due to
+     * rounding differences in the conversion process.
+     *
+     * # Arguments
+     * - `wld_vault_address`: The address of the `WLDVault` contract to migrate from.
+     * - `erc4626_vault_address`: The address of the new ERC4626 vault contract to migrate to.
+     *
+     * # Errors
+     * - Returns [`TransactionError::PrimitiveError`] if any of the vault addresses are invalid.
+     * - Returns [`TransactionError::Generic`] if the migration transaction creation fails.
+     * - Returns [`TransactionError::Generic`] if the transaction submission fails.
+     * - Returns [`TransactionError::Generic`] if the global HTTP client has not been initialized.
+     */
+open func transactionWldLegacyVaultMigrate(legacyVaultAddress: String, erc4626VaultAddress: String)async throws  -> HexEncodedData  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_safesmartaccount_transaction_wld_legacy_vault_migrate(
+                    self.uniffiCloneHandle(),
+                    FfiConverterString.lower(legacyVaultAddress),FfiConverterString.lower(erc4626VaultAddress)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_u64,
@@ -12807,6 +12986,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_turnkey_stamp() != 28531) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_method_migrationcontroller_delete_all_records() != 44884) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_method_migrationcontroller_run_migrations() != 30600) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -12933,7 +13115,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_safesmartaccount_sign_4337_op() != 60756) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_sign_permit2_transfer() != 39634) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_sign_permit2_transfer() != 36460) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_sign_transaction() != 58792) {
@@ -12955,6 +13137,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_transfer() != 4941) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_usd_legacy_vault_migrate() != 17686) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_wld_legacy_vault_migrate() != 37719) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_world_campaign_manager_claim() != 52760) {
@@ -12987,7 +13175,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_constructor_turnkey_new() != 46031) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_migrationcontroller_new() != 32310) {
+    if (uniffi_bedrock_checksum_constructor_migrationcontroller_new() != 42584) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_enclaveattestationverifier_new() != 36598) {
