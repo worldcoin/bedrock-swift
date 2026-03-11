@@ -4264,6 +4264,27 @@ public protocol MigrationControllerProtocol: AnyObject, Sendable {
     func deleteAllRecords() throws  -> Int32
     
     /**
+     * List the current record for every registered processor.
+     *
+     * Returns one [`MigrationRecordEntry`] per registered processor. Processors
+     * that have never been attempted are included with status
+     * [`MigrationStatus::NotStarted`] and zero attempts. Corrupted or missing
+     * store entries are treated as a reset rather than an error.
+     *
+     * # Errors
+     *
+     * Returns `MigrationError::InvalidOperation` if a migration run is currently in progress.
+     * Returns `MigrationError::DeviceKeyValueStoreError` only for unexpected store failures;
+     * missing keys and parse errors are treated as resets and do not propagate.
+     *
+     * # Concurrency
+     *
+     * Acquires the global migration lock to ensure a consistent snapshot is
+     * returned while no migration is actively modifying the records.
+     */
+    func listAllRecords() throws  -> [MigrationRecordEntry]
+    
+    /**
      * Run all registered migrations
      *
      * This is an async call that may take several seconds depending on network
@@ -4399,6 +4420,33 @@ public convenience init(kvStore: DeviceKeyValueStore, safeAccount: SafeSmartAcco
 open func deleteAllRecords()throws  -> Int32  {
     return try  FfiConverterInt32.lift(try rustCallWithError(FfiConverterTypeMigrationError_lift) {
     uniffi_bedrock_fn_method_migrationcontroller_delete_all_records(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+    /**
+     * List the current record for every registered processor.
+     *
+     * Returns one [`MigrationRecordEntry`] per registered processor. Processors
+     * that have never been attempted are included with status
+     * [`MigrationStatus::NotStarted`] and zero attempts. Corrupted or missing
+     * store entries are treated as a reset rather than an error.
+     *
+     * # Errors
+     *
+     * Returns `MigrationError::InvalidOperation` if a migration run is currently in progress.
+     * Returns `MigrationError::DeviceKeyValueStoreError` only for unexpected store failures;
+     * missing keys and parse errors are treated as resets and do not propagate.
+     *
+     * # Concurrency
+     *
+     * Acquires the global migration lock to ensure a consistent snapshot is
+     * returned while no migration is actively modifying the records.
+     */
+open func listAllRecords()throws  -> [MigrationRecordEntry]  {
+    return try  FfiConverterSequenceTypeMigrationRecordEntry.lift(try rustCallWithError(FfiConverterTypeMigrationError_lift) {
+    uniffi_bedrock_fn_method_migrationcontroller_list_all_records(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -5360,24 +5408,6 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
     func transactionWldLegacyVaultMigrate(legacyVaultAddress: String, erc4626VaultAddress: String) async throws  -> HexEncodedData
     
     /**
-     * Claims a campaign gift using the `WorldCampaignManager` contract.
-     *
-     * # Errors
-     * - Returns [`TransactionError::PrimitiveError`] if any of the provided attributes are invalid.
-     * - Returns [`TransactionError::Generic`] if the transaction submission fails.
-     */
-    func transactionWorldCampaignManagerClaim(campaignIdStr: String) async throws  -> HexEncodedData
-    
-    /**
-     * Sponsors a campaign gift using the `WorldCampaignManager` contract.
-     *
-     * # Errors
-     * - Returns [`TransactionError::PrimitiveError`] if any of the provided attributes are invalid.
-     * - Returns [`TransactionError::Generic`] if the transaction submission fails.
-     */
-    func transactionWorldCampaignManagerSponsor(campaignIdStr: String, toAddress: String) async throws  -> HexEncodedData
-    
-    /**
      * Cancel a gift using the `WorldGiftManager` contract.
      *
      * # Errors
@@ -5930,54 +5960,6 @@ open func transactionWldLegacyVaultMigrate(legacyVaultAddress: String, erc4626Va
                 uniffi_bedrock_fn_method_safesmartaccount_transaction_wld_legacy_vault_migrate(
                     self.uniffiCloneHandle(),
                     FfiConverterString.lower(legacyVaultAddress),FfiConverterString.lower(erc4626VaultAddress)
-                )
-            },
-            pollFunc: ffi_bedrock_rust_future_poll_u64,
-            completeFunc: ffi_bedrock_rust_future_complete_u64,
-            freeFunc: ffi_bedrock_rust_future_free_u64,
-            liftFunc: FfiConverterTypeHexEncodedData_lift,
-            errorHandler: FfiConverterTypeTransactionError_lift
-        )
-}
-    
-    /**
-     * Claims a campaign gift using the `WorldCampaignManager` contract.
-     *
-     * # Errors
-     * - Returns [`TransactionError::PrimitiveError`] if any of the provided attributes are invalid.
-     * - Returns [`TransactionError::Generic`] if the transaction submission fails.
-     */
-open func transactionWorldCampaignManagerClaim(campaignIdStr: String)async throws  -> HexEncodedData  {
-    return
-        try  await uniffiRustCallAsync(
-            rustFutureFunc: {
-                uniffi_bedrock_fn_method_safesmartaccount_transaction_world_campaign_manager_claim(
-                    self.uniffiCloneHandle(),
-                    FfiConverterString.lower(campaignIdStr)
-                )
-            },
-            pollFunc: ffi_bedrock_rust_future_poll_u64,
-            completeFunc: ffi_bedrock_rust_future_complete_u64,
-            freeFunc: ffi_bedrock_rust_future_free_u64,
-            liftFunc: FfiConverterTypeHexEncodedData_lift,
-            errorHandler: FfiConverterTypeTransactionError_lift
-        )
-}
-    
-    /**
-     * Sponsors a campaign gift using the `WorldCampaignManager` contract.
-     *
-     * # Errors
-     * - Returns [`TransactionError::PrimitiveError`] if any of the provided attributes are invalid.
-     * - Returns [`TransactionError::Generic`] if the transaction submission fails.
-     */
-open func transactionWorldCampaignManagerSponsor(campaignIdStr: String, toAddress: String)async throws  -> HexEncodedData  {
-    return
-        try  await uniffiRustCallAsync(
-            rustFutureFunc: {
-                uniffi_bedrock_fn_method_safesmartaccount_transaction_world_campaign_manager_sponsor(
-                    self.uniffiCloneHandle(),
-                    FfiConverterString.lower(campaignIdStr),FfiConverterString.lower(toAddress)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_u64,
@@ -7428,6 +7410,140 @@ public func FfiConverterTypeManifestDebug_lift(_ buf: RustBuffer) throws -> Mani
 #endif
 public func FfiConverterTypeManifestDebug_lower(_ value: ManifestDebug) -> RustBuffer {
     return FfiConverterTypeManifestDebug.lower(value)
+}
+
+
+/**
+ * A single migration record entry returned by [`MigrationController::list_all_records`].
+ *
+ * FFI-facing view of a migration's persisted execution state, combining the
+ * processor's migration ID with the fields from [`MigrationRecord`] that are
+ * relevant to external consumers.
+
+ */
+public struct MigrationRecordEntry: Equatable, Hashable {
+    /**
+     * The migration identifier (e.g. `"worldId.credentials.nfc.refresh.v2"`).
+     */
+    public var migrationId: String
+    /**
+     * Current execution status.
+     */
+    public var status: MigrationStatus
+    /**
+     * Number of execution attempts so far.
+     */
+    public var attempts: Int32
+    /**
+     * ISO 8601 timestamp when the migration was first started, if any.
+     */
+    public var startedAt: String?
+    /**
+     * ISO 8601 timestamp of the most recent attempt, if any.
+     */
+    public var lastAttemptedAt: String?
+    /**
+     * Error code from the most recent failed attempt, if any.
+     */
+    public var lastErrorCode: String?
+    /**
+     * Error message from the most recent failed attempt, if any.
+     */
+    public var lastErrorMessage: String?
+    /**
+     * ISO 8601 timestamp when the migration completed successfully, if any.
+     */
+    public var completedAt: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The migration identifier (e.g. `"worldId.credentials.nfc.refresh.v2"`).
+         */migrationId: String, 
+        /**
+         * Current execution status.
+         */status: MigrationStatus, 
+        /**
+         * Number of execution attempts so far.
+         */attempts: Int32, 
+        /**
+         * ISO 8601 timestamp when the migration was first started, if any.
+         */startedAt: String?, 
+        /**
+         * ISO 8601 timestamp of the most recent attempt, if any.
+         */lastAttemptedAt: String?, 
+        /**
+         * Error code from the most recent failed attempt, if any.
+         */lastErrorCode: String?, 
+        /**
+         * Error message from the most recent failed attempt, if any.
+         */lastErrorMessage: String?, 
+        /**
+         * ISO 8601 timestamp when the migration completed successfully, if any.
+         */completedAt: String?) {
+        self.migrationId = migrationId
+        self.status = status
+        self.attempts = attempts
+        self.startedAt = startedAt
+        self.lastAttemptedAt = lastAttemptedAt
+        self.lastErrorCode = lastErrorCode
+        self.lastErrorMessage = lastErrorMessage
+        self.completedAt = completedAt
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension MigrationRecordEntry: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMigrationRecordEntry: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MigrationRecordEntry {
+        return
+            try MigrationRecordEntry(
+                migrationId: FfiConverterString.read(from: &buf), 
+                status: FfiConverterTypeMigrationStatus.read(from: &buf), 
+                attempts: FfiConverterInt32.read(from: &buf), 
+                startedAt: FfiConverterOptionString.read(from: &buf), 
+                lastAttemptedAt: FfiConverterOptionString.read(from: &buf), 
+                lastErrorCode: FfiConverterOptionString.read(from: &buf), 
+                lastErrorMessage: FfiConverterOptionString.read(from: &buf), 
+                completedAt: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: MigrationRecordEntry, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.migrationId, into: &buf)
+        FfiConverterTypeMigrationStatus.write(value.status, into: &buf)
+        FfiConverterInt32.write(value.attempts, into: &buf)
+        FfiConverterOptionString.write(value.startedAt, into: &buf)
+        FfiConverterOptionString.write(value.lastAttemptedAt, into: &buf)
+        FfiConverterOptionString.write(value.lastErrorCode, into: &buf)
+        FfiConverterOptionString.write(value.lastErrorMessage, into: &buf)
+        FfiConverterOptionString.write(value.completedAt, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMigrationRecordEntry_lift(_ buf: RustBuffer) throws -> MigrationRecordEntry {
+    return try FfiConverterTypeMigrationRecordEntry.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMigrationRecordEntry_lower(_ value: MigrationRecordEntry) -> RustBuffer {
+    return FfiConverterTypeMigrationRecordEntry.lower(value)
 }
 
 
@@ -8950,6 +9066,10 @@ public enum BackupFileDesignator: Equatable, Hashable {
      * Document (NFC) Personal Custody Package (PCP) or "Document Credential"
      */
     case documentPkg
+    /**
+     * Credential storage vault (plaintext export of account.vault.sqlite)
+     */
+    case credentialVault
 
 
 
@@ -8975,6 +9095,8 @@ public struct FfiConverterTypeBackupFileDesignator: FfiConverterRustBuffer {
         
         case 2: return .documentPkg
         
+        case 3: return .credentialVault
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -8989,6 +9111,10 @@ public struct FfiConverterTypeBackupFileDesignator: FfiConverterRustBuffer {
         
         case .documentPkg:
             writeInt(&buf, Int32(2))
+        
+        
+        case .credentialVault:
+            writeInt(&buf, Int32(3))
         
         }
     }
@@ -10649,6 +10775,112 @@ public func FfiConverterTypeMigrationError_lower(_ value: MigrationError) -> Rus
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
+ * Status of a single migration
+ */
+
+public enum MigrationStatus: Equatable, Hashable {
+    
+    /**
+     * Migration has not been started yet
+     */
+    case notStarted
+    /**
+     * Migration is currently in progress
+     */
+    case inProgress
+    /**
+     * Migration completed successfully
+     */
+    case succeeded
+    /**
+     * Migration failed but can be retried
+     */
+    case failedRetryable
+    /**
+     * Migration failed with terminal error (won't retry)
+     */
+    case failedTerminal
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension MigrationStatus: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMigrationStatus: FfiConverterRustBuffer {
+    typealias SwiftType = MigrationStatus
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MigrationStatus {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .notStarted
+        
+        case 2: return .inProgress
+        
+        case 3: return .succeeded
+        
+        case 4: return .failedRetryable
+        
+        case 5: return .failedTerminal
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: MigrationStatus, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .notStarted:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .inProgress:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .succeeded:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .failedRetryable:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .failedTerminal:
+            writeInt(&buf, Int32(5))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMigrationStatus_lift(_ buf: RustBuffer) throws -> MigrationStatus {
+    return try FfiConverterTypeMigrationStatus.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMigrationStatus_lower(_ value: MigrationStatus) -> RustBuffer {
+    return FfiConverterTypeMigrationStatus.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
  * Supported blockchain networks for Bedrock operations
  */
 
@@ -10959,10 +11191,7 @@ public enum ProcessorResult: Equatable, Hashable {
          */errorCode: String, 
         /**
          * Human-readable error message
-         */errorMessage: String, 
-        /**
-         * Optional delay in milliseconds before retrying
-         */retryAfterMs: Int64?
+         */errorMessage: String
     )
     /**
      * Migration failed with terminal error (won't retry)
@@ -10998,7 +11227,7 @@ public struct FfiConverterTypeProcessorResult: FfiConverterRustBuffer {
         
         case 1: return .success
         
-        case 2: return .retryable(errorCode: try FfiConverterString.read(from: &buf), errorMessage: try FfiConverterString.read(from: &buf), retryAfterMs: try FfiConverterOptionInt64.read(from: &buf)
+        case 2: return .retryable(errorCode: try FfiConverterString.read(from: &buf), errorMessage: try FfiConverterString.read(from: &buf)
         )
         
         case 3: return .terminal(errorCode: try FfiConverterString.read(from: &buf), errorMessage: try FfiConverterString.read(from: &buf)
@@ -11016,11 +11245,10 @@ public struct FfiConverterTypeProcessorResult: FfiConverterRustBuffer {
             writeInt(&buf, Int32(1))
         
         
-        case let .retryable(errorCode,errorMessage,retryAfterMs):
+        case let .retryable(errorCode,errorMessage):
             writeInt(&buf, Int32(2))
             FfiConverterString.write(errorCode, into: &buf)
             FfiConverterString.write(errorMessage, into: &buf)
-            FfiConverterOptionInt64.write(retryAfterMs, into: &buf)
             
         
         case let .terminal(errorCode,errorMessage):
@@ -12133,30 +12361,6 @@ fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterOptionInt64: FfiConverterRustBuffer {
-    typealias SwiftType = Int64?
-
-    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
-        guard let value = value else {
-            writeInt(&buf, Int8(0))
-            return
-        }
-        writeInt(&buf, Int8(1))
-        FfiConverterInt64.write(value, into: &buf)
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
-        switch try readInt(&buf) as Int8 {
-        case 0: return nil
-        case 1: return try FfiConverterInt64.read(from: &buf)
-        default: throw UniffiInternalError.unexpectedOptionalTag
-        }
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
 fileprivate struct FfiConverterOptionBool: FfiConverterRustBuffer {
     typealias SwiftType = Bool?
 
@@ -12465,6 +12669,31 @@ fileprivate struct FfiConverterSequenceTypeHttpHeader: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeHttpHeader.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeMigrationRecordEntry: FfiConverterRustBuffer {
+    typealias SwiftType = [MigrationRecordEntry]
+
+    public static func write(_ value: [MigrationRecordEntry], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeMigrationRecordEntry.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [MigrationRecordEntry] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [MigrationRecordEntry]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeMigrationRecordEntry.read(from: &buf))
         }
         return seq
     }
@@ -12989,6 +13218,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_migrationcontroller_delete_all_records() != 44884) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_method_migrationcontroller_list_all_records() != 65242) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_method_migrationcontroller_run_migrations() != 30600) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -13143,12 +13375,6 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_wld_legacy_vault_migrate() != 37719) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_world_campaign_manager_claim() != 52760) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_world_campaign_manager_sponsor() != 57631) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_world_gift_manager_cancel() != 37005) {
