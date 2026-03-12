@@ -1024,6 +1024,22 @@ public protocol BackupManagerProtocol: AnyObject, Sendable {
      */
     func setBackupReportAttributes(input: BackupReportInput) 
     
+    /**
+     * Signs the given challenge with the backup account key.
+     *
+     * This is used for the `/v1/reset` endpoint for when the user has lost access
+     * to all their factors but they still have access to their account. This allows
+     * for a remote reset of their backup.
+     *
+     * Returns the signature as a base64-encoded DER string.
+     *
+     * # Errors
+     * - `BackupError::InvalidRootSecretError` if the root secret is
+     * malformed.
+     * - `BackupError::Generic` if key derivation fails.
+     */
+    func signWithBackupAccountKey(rootSecret: String, challenge: Data) throws  -> String
+    
 }
 /**
  * Tools for storing, retrieving, encrypting and decrypting backup data.
@@ -1308,6 +1324,30 @@ open func setBackupReportAttributes(input: BackupReportInput)  {try! rustCall() 
         FfiConverterTypeBackupReportInput_lower(input),$0
     )
 }
+}
+    
+    /**
+     * Signs the given challenge with the backup account key.
+     *
+     * This is used for the `/v1/reset` endpoint for when the user has lost access
+     * to all their factors but they still have access to their account. This allows
+     * for a remote reset of their backup.
+     *
+     * Returns the signature as a base64-encoded DER string.
+     *
+     * # Errors
+     * - `BackupError::InvalidRootSecretError` if the root secret is
+     * malformed.
+     * - `BackupError::Generic` if key derivation fails.
+     */
+open func signWithBackupAccountKey(rootSecret: String, challenge: Data)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeBackupError_lift) {
+    uniffi_bedrock_fn_method_backupmanager_sign_with_backup_account_key(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(rootSecret),
+        FfiConverterData.lower(challenge),$0
+    )
+})
 }
     
 
@@ -13183,6 +13223,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_backupmanager_set_backup_report_attributes() != 28311) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_backupmanager_sign_with_backup_account_key() != 38909) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_manifestmanager_list_files() != 2075) {
