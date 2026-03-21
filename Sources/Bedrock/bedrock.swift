@@ -4262,6 +4262,219 @@ public func FfiConverterTypeManifestManager_lower(_ value: ManifestManager) -> U
 
 
 /**
+ * An [EIP-4361](https://eips.ethereum.org/EIPS/eip-4361) Sign-In with Ethereum message.
+ */
+public protocol MessageProtocol: AnyObject, Sendable {
+    
+    /**
+     * Signs this SIWE message with the given Safe smart account (EIP-191).
+     *
+     * # Errors
+     * - [`SiweError::Signing`] if the signing operation fails.
+     */
+    func sign(smartAccount: SafeSmartAccount) throws  -> HexEncodedData
+    
+    /**
+     * Computes a hash of the key attributes of the message for caching purposes.
+     *
+     * This is used for the "login automatically" feature where the client auto-signs
+     * for subsequent Mini Apps if the user approved it.
+     *
+     * # Panics
+     * Should never panic
+     */
+    func toCacheHash(scheme: String, currentUrlDomain: String)  -> HexEncodedData
+    
+    /**
+     * Returns the serialized EIP-4361 message string.
+     */
+    func toMessageString()  -> String
+    
+}
+/**
+ * An [EIP-4361](https://eips.ethereum.org/EIPS/eip-4361) Sign-In with Ethereum message.
+ */
+open class Message: MessageProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_message(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_bedrock_fn_free_message(handle, $0) }
+    }
+
+    
+    /**
+     * Parses a SIWE message string, substituting the smart account's
+     * checksummed wallet address for the first `{address}` placeholder.
+     *
+     * # Errors
+     * - [`SiweError::Parse`] if the message string is not valid EIP-4361.
+     */
+public static func fromStrWithAccount(s: String, smartAccount: SafeSmartAccount)throws  -> Message  {
+    return try  FfiConverterTypeMessage_lift(try rustCallWithError(FfiConverterTypeSiweError_lift) {
+    uniffi_bedrock_fn_constructor_message_from_str_with_account(
+        FfiConverterString.lower(s),
+        FfiConverterTypeSafeSmartAccount_lower(smartAccount),$0
+    )
+})
+}
+    
+    /**
+     * Creates a SIWE message for World App authentication flows.
+     *
+     * # Errors
+     * - [`SiweError::InvalidBaseUrl`] if the base URL cannot be parsed.
+     */
+public static func fromWorldAppAuthRequest(flow: WorldAppAuthFlow, baseUrl: String, smartAccount: SafeSmartAccount)throws  -> Message  {
+    return try  FfiConverterTypeMessage_lift(try rustCallWithError(FfiConverterTypeSiweError_lift) {
+    uniffi_bedrock_fn_constructor_message_from_world_app_auth_request(
+        FfiConverterTypeWorldAppAuthFlow_lower(flow),
+        FfiConverterString.lower(baseUrl),
+        FfiConverterTypeSafeSmartAccount_lower(smartAccount),$0
+    )
+})
+}
+    
+
+    
+    /**
+     * Signs this SIWE message with the given Safe smart account (EIP-191).
+     *
+     * # Errors
+     * - [`SiweError::Signing`] if the signing operation fails.
+     */
+open func sign(smartAccount: SafeSmartAccount)throws  -> HexEncodedData  {
+    return try  FfiConverterTypeHexEncodedData_lift(try rustCallWithError(FfiConverterTypeSiweError_lift) {
+    uniffi_bedrock_fn_method_message_sign(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeSafeSmartAccount_lower(smartAccount),$0
+    )
+})
+}
+    
+    /**
+     * Computes a hash of the key attributes of the message for caching purposes.
+     *
+     * This is used for the "login automatically" feature where the client auto-signs
+     * for subsequent Mini Apps if the user approved it.
+     *
+     * # Panics
+     * Should never panic
+     */
+open func toCacheHash(scheme: String, currentUrlDomain: String) -> HexEncodedData  {
+    return try!  FfiConverterTypeHexEncodedData_lift(try! rustCall() {
+    uniffi_bedrock_fn_method_message_to_cache_hash(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(scheme),
+        FfiConverterString.lower(currentUrlDomain),$0
+    )
+})
+}
+    
+    /**
+     * Returns the serialized EIP-4361 message string.
+     */
+open func toMessageString() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_bedrock_fn_method_message_to_message_string(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMessage: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = Message
+
+    public static func lift(_ handle: UInt64) throws -> Message {
+        return Message(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: Message) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Message {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: Message, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMessage_lift(_ handle: UInt64) throws -> Message {
+    return try FfiConverterTypeMessage.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMessage_lower(_ value: Message) -> UInt64 {
+    return FfiConverterTypeMessage.lower(value)
+}
+
+
+
+
+
+
+/**
  * Controller that orchestrates migration execution
  *
  * ## Storage Architecture
@@ -4951,6 +5164,202 @@ public func FfiConverterTypeMigrationProcessor_lift(_ handle: UInt64) throws -> 
 #endif
 public func FfiConverterTypeMigrationProcessor_lower(_ value: MigrationProcessor) -> UInt64 {
     return FfiConverterTypeMigrationProcessor.lower(value)
+}
+
+
+
+
+
+
+/**
+ * A pluggable time source for foreign bindings for remote NTP.
+ */
+public protocol Ntp: AnyObject, Sendable {
+    
+    /**
+     * Returns the current timestamp in milliseconds since the Unix Epoch (UTC)
+     */
+    func nowMillis()  -> Int64
+    
+}
+/**
+ * A pluggable time source for foreign bindings for remote NTP.
+ */
+open class NtpImpl: Ntp, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_ntp(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_bedrock_fn_free_ntp(handle, $0) }
+    }
+
+    
+
+    
+    /**
+     * Returns the current timestamp in milliseconds since the Unix Epoch (UTC)
+     */
+open func nowMillis() -> Int64  {
+    return try!  FfiConverterInt64.lift(try! rustCall() {
+    uniffi_bedrock_fn_method_ntp_now_millis(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+
+    
+}
+
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceNtp {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    //
+    // This creates 1-element array, since this seems to be the only way to construct a const
+    // pointer that we can pass to the Rust code.
+    static let vtable: [UniffiVTableCallbackInterfaceNtp] = [UniffiVTableCallbackInterfaceNtp(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterTypeNtp.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface Ntp: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterTypeNtp.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface Ntp: handle missing in uniffiClone")
+            }
+        },
+        nowMillis: { (
+            uniffiHandle: UInt64,
+            uniffiOutReturn: UnsafeMutablePointer<Int64>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> Int64 in
+                guard let uniffiObj = try? FfiConverterTypeNtp.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.nowMillis(
+                )
+            }
+
+            
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterInt64.lower($0) }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        }
+    )]
+}
+
+private func uniffiCallbackInitNtp() {
+    uniffi_bedrock_fn_init_callback_vtable_ntp(UniffiCallbackInterfaceNtp.vtable)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNtp: FfiConverter {
+    fileprivate static let handleMap = UniffiHandleMap<Ntp>()
+
+    typealias FfiType = UInt64
+    typealias SwiftType = Ntp
+
+    public static func lift(_ handle: UInt64) throws -> Ntp {
+        if ((handle & 1) == 0) {
+            // Rust-generated handle, construct a new class that uses the handle to implement the
+            // interface
+            return NtpImpl(unsafeFromHandle: handle)
+        } else {
+            // Swift-generated handle, get the object from the handle map
+            return try handleMap.remove(handle: handle)
+        }
+    }
+
+    public static func lower(_ value: Ntp) -> UInt64 {
+         if let rustImpl = value as? NtpImpl {
+             // Rust-implemented object.  Clone the handle and return it
+            return rustImpl.uniffiCloneHandle()
+         } else {
+            // Swift object, generate a new vtable handle and return that.
+            return handleMap.insert(obj: value)
+         }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Ntp {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: Ntp, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNtp_lift(_ handle: UInt64) throws -> Ntp {
+    return try FfiConverterTypeNtp.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNtp_lower(_ value: Ntp) -> UInt64 {
+    return FfiConverterTypeNtp.lower(value)
 }
 
 
@@ -12001,6 +12410,141 @@ public func FfiConverterTypeSafeSmartAccountError_lower(_ value: SafeSmartAccoun
 
 
 /**
+ * Errors raised by SIWE operations (parsing, signing, message construction).
+ */
+public enum SiweError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+
+    
+    
+    /**
+     * The SIWE message could not be parsed from the input string.
+     */
+    case Parse(String
+    )
+    /**
+     * The base URL could not be parsed into a valid URI or authority.
+     */
+    case InvalidBaseUrl(String
+    )
+    /**
+     * Signing the message failed.
+     */
+    case Signing(String
+    )
+    /**
+     * A generic error that can wrap any anyhow error.
+     */
+    case Generic(
+        /**
+         * The error message from the wrapped error.
+         */errorMessage: String
+    )
+    /**
+     * Filesystem operation error.
+     */
+    case FileSystem(FileSystemError
+    )
+
+    
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
+}
+
+#if compiler(>=6)
+extension SiweError: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSiweError: FfiConverterRustBuffer {
+    typealias SwiftType = SiweError
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SiweError {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        
+
+        
+        case 1: return .Parse(
+            try FfiConverterString.read(from: &buf)
+            )
+        case 2: return .InvalidBaseUrl(
+            try FfiConverterString.read(from: &buf)
+            )
+        case 3: return .Signing(
+            try FfiConverterString.read(from: &buf)
+            )
+        case 4: return .Generic(
+            errorMessage: try FfiConverterString.read(from: &buf)
+            )
+        case 5: return .FileSystem(
+            try FfiConverterTypeFileSystemError.read(from: &buf)
+            )
+
+         default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: SiweError, into buf: inout [UInt8]) {
+        switch value {
+
+        
+
+        
+        
+        case let .Parse(v1):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .InvalidBaseUrl(v1):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .Signing(v1):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .Generic(errorMessage):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(errorMessage, into: &buf)
+            
+        
+        case let .FileSystem(v1):
+            writeInt(&buf, Int32(5))
+            FfiConverterTypeFileSystemError.write(v1, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSiweError_lift(_ buf: RustBuffer) throws -> SiweError {
+    return try FfiConverterTypeSiweError.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSiweError_lower(_ value: SiweError) -> RustBuffer {
+    return FfiConverterTypeSiweError.lower(value)
+}
+
+
+/**
  * Errors that can occur when interacting with transaction operations.
  */
 public enum TransactionError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
@@ -12349,6 +12893,105 @@ public func FfiConverterTypeTurnkeyError_lift(_ buf: RustBuffer) throws -> Turnk
 public func FfiConverterTypeTurnkeyError_lower(_ value: TurnkeyError) -> RustBuffer {
     return FfiConverterTypeTurnkeyError.lower(value)
 }
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * World App authentication flow variants used to construct SIWE messages.
+ */
+
+public enum WorldAppAuthFlow: Equatable, Hashable {
+    
+    /**
+     * User has a valid and non-expired refresh token
+     */
+    case refresh
+    /**
+     * No refresh token, just access to wallet
+     */
+    case restore
+    /**
+     * New account
+     */
+    case signUp
+
+
+
+    /**
+     * Returns the full SIWE URI for the given flow, appending the
+     * appropriate backend path to `base_url`.
+     */
+public func asSiweUri(baseUrl: String) -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_bedrock_fn_method_worldappauthflow_as_siwe_uri(
+            FfiConverterTypeWorldAppAuthFlow_lower(self),
+        FfiConverterString.lower(baseUrl),$0
+    )
+})
+}
+
+
+
+}
+
+#if compiler(>=6)
+extension WorldAppAuthFlow: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeWorldAppAuthFlow: FfiConverterRustBuffer {
+    typealias SwiftType = WorldAppAuthFlow
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> WorldAppAuthFlow {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .refresh
+        
+        case 2: return .restore
+        
+        case 3: return .signUp
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: WorldAppAuthFlow, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .refresh:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .restore:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .signUp:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeWorldAppAuthFlow_lift(_ buf: RustBuffer) throws -> WorldAppAuthFlow {
+    return try FfiConverterTypeWorldAppAuthFlow.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeWorldAppAuthFlow_lower(_ value: WorldAppAuthFlow) -> RustBuffer {
+    return FfiConverterTypeWorldAppAuthFlow.lower(value)
+}
+
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -13089,6 +13732,15 @@ public func setLogger(logger: Logger)  {try! rustCall() {
 }
 }
 /**
+ * Configures the global time provider.
+ */
+public func setTimeProvider(provider: Ntp)  {try! rustCall() {
+    uniffi_bedrock_fn_func_set_time_provider(
+        FfiConverterTypeNtp_lower(provider),$0
+    )
+}
+}
+/**
  * Returns the ERC-4337 v0.7 `EntryPoint` contract address used by World App.
  *
  * Contract reference: <https://github.com/eth-infinitism/account-abstraction/blob/v0.7.0/contracts/core/EntryPoint.sol>
@@ -13190,6 +13842,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_func_set_logger() != 7633) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_func_set_time_provider() != 54619) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_func_entrypoint_address() != 51207) {
@@ -13336,6 +13991,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_logger_log() != 60343) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_method_ntp_now_millis() != 25299) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_method_filesystemtester_test_delete_file() != 26183) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -13382,6 +14040,15 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_rootkey_is_v0() != 24729) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_message_sign() != 19598) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_message_to_cache_hash() != 41959) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_message_to_message_string() != 57230) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_personal_sign() != 44448) {
@@ -13474,6 +14141,12 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_constructor_rootkey_new_random() != 47400) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_constructor_message_from_str_with_account() != 8893) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_constructor_message_from_world_app_auth_request() != 8222) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_constructor_safesmartaccount_new() != 35976) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -13484,6 +14157,7 @@ private let initializationResult: InitializationResult = {
     uniffiCallbackInitFileSystem()
     uniffiCallbackInitLogger()
     uniffiCallbackInitMigrationProcessor()
+    uniffiCallbackInitNtp()
     return InitializationResult.ok
 }()
 
