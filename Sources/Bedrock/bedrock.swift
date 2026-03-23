@@ -4262,219 +4262,6 @@ public func FfiConverterTypeManifestManager_lower(_ value: ManifestManager) -> U
 
 
 /**
- * An [EIP-4361](https://eips.ethereum.org/EIPS/eip-4361) Sign-In with Ethereum message.
- */
-public protocol MessageProtocol: AnyObject, Sendable {
-    
-    /**
-     * Signs this SIWE message with the given Safe smart account (EIP-191).
-     *
-     * # Errors
-     * - [`SiweError::Signing`] if the signing operation fails.
-     */
-    func sign(smartAccount: SafeSmartAccount) throws  -> HexEncodedData
-    
-    /**
-     * Computes a hash of the key attributes of the message for caching purposes.
-     *
-     * This is used for the "login automatically" feature where the client auto-signs
-     * for subsequent Mini Apps if the user approved it.
-     *
-     * # Panics
-     * Should never panic
-     */
-    func toCacheHash(scheme: String, currentUrlDomain: String)  -> HexEncodedData
-    
-    /**
-     * Returns the serialized EIP-4361 message string.
-     */
-    func toMessageString()  -> String
-    
-}
-/**
- * An [EIP-4361](https://eips.ethereum.org/EIPS/eip-4361) Sign-In with Ethereum message.
- */
-open class Message: MessageProtocol, @unchecked Sendable {
-    fileprivate let handle: UInt64
-
-    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public struct NoHandle {
-        public init() {}
-    }
-
-    // TODO: We'd like this to be `private` but for Swifty reasons,
-    // we can't implement `FfiConverter` without making this `required` and we can't
-    // make it `required` without making it `public`.
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    required public init(unsafeFromHandle handle: UInt64) {
-        self.handle = handle
-    }
-
-    // This constructor can be used to instantiate a fake object.
-    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
-    //
-    // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public init(noHandle: NoHandle) {
-        self.handle = 0
-    }
-
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public func uniffiCloneHandle() -> UInt64 {
-        return try! rustCall { uniffi_bedrock_fn_clone_message(self.handle, $0) }
-    }
-    // No primary constructor declared for this class.
-
-    deinit {
-        if handle == 0 {
-            // Mock objects have handle=0 don't try to free them
-            return
-        }
-
-        try! rustCall { uniffi_bedrock_fn_free_message(handle, $0) }
-    }
-
-    
-    /**
-     * Parses a SIWE message string, substituting the smart account's
-     * checksummed wallet address for the first `{address}` placeholder.
-     *
-     * # Errors
-     * - [`SiweError::Parse`] if the message string is not valid EIP-4361.
-     */
-public static func fromStrWithAccount(s: String, smartAccount: SafeSmartAccount)throws  -> Message  {
-    return try  FfiConverterTypeMessage_lift(try rustCallWithError(FfiConverterTypeSiweError_lift) {
-    uniffi_bedrock_fn_constructor_message_from_str_with_account(
-        FfiConverterString.lower(s),
-        FfiConverterTypeSafeSmartAccount_lower(smartAccount),$0
-    )
-})
-}
-    
-    /**
-     * Creates a SIWE message for World App authentication flows.
-     *
-     * # Errors
-     * - [`SiweError::InvalidBaseUrl`] if the base URL cannot be parsed.
-     */
-public static func fromWorldAppAuthRequest(flow: WorldAppAuthFlow, baseUrl: String, smartAccount: SafeSmartAccount)throws  -> Message  {
-    return try  FfiConverterTypeMessage_lift(try rustCallWithError(FfiConverterTypeSiweError_lift) {
-    uniffi_bedrock_fn_constructor_message_from_world_app_auth_request(
-        FfiConverterTypeWorldAppAuthFlow_lower(flow),
-        FfiConverterString.lower(baseUrl),
-        FfiConverterTypeSafeSmartAccount_lower(smartAccount),$0
-    )
-})
-}
-    
-
-    
-    /**
-     * Signs this SIWE message with the given Safe smart account (EIP-191).
-     *
-     * # Errors
-     * - [`SiweError::Signing`] if the signing operation fails.
-     */
-open func sign(smartAccount: SafeSmartAccount)throws  -> HexEncodedData  {
-    return try  FfiConverterTypeHexEncodedData_lift(try rustCallWithError(FfiConverterTypeSiweError_lift) {
-    uniffi_bedrock_fn_method_message_sign(
-            self.uniffiCloneHandle(),
-        FfiConverterTypeSafeSmartAccount_lower(smartAccount),$0
-    )
-})
-}
-    
-    /**
-     * Computes a hash of the key attributes of the message for caching purposes.
-     *
-     * This is used for the "login automatically" feature where the client auto-signs
-     * for subsequent Mini Apps if the user approved it.
-     *
-     * # Panics
-     * Should never panic
-     */
-open func toCacheHash(scheme: String, currentUrlDomain: String) -> HexEncodedData  {
-    return try!  FfiConverterTypeHexEncodedData_lift(try! rustCall() {
-    uniffi_bedrock_fn_method_message_to_cache_hash(
-            self.uniffiCloneHandle(),
-        FfiConverterString.lower(scheme),
-        FfiConverterString.lower(currentUrlDomain),$0
-    )
-})
-}
-    
-    /**
-     * Returns the serialized EIP-4361 message string.
-     */
-open func toMessageString() -> String  {
-    return try!  FfiConverterString.lift(try! rustCall() {
-    uniffi_bedrock_fn_method_message_to_message_string(
-            self.uniffiCloneHandle(),$0
-    )
-})
-}
-    
-
-    
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeMessage: FfiConverter {
-    typealias FfiType = UInt64
-    typealias SwiftType = Message
-
-    public static func lift(_ handle: UInt64) throws -> Message {
-        return Message(unsafeFromHandle: handle)
-    }
-
-    public static func lower(_ value: Message) -> UInt64 {
-        return value.uniffiCloneHandle()
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Message {
-        let handle: UInt64 = try readInt(&buf)
-        return try lift(handle)
-    }
-
-    public static func write(_ value: Message, into buf: inout [UInt8]) {
-        writeInt(&buf, lower(value))
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeMessage_lift(_ handle: UInt64) throws -> Message {
-    return try FfiConverterTypeMessage.lift(handle)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeMessage_lower(_ value: Message) -> UInt64 {
-    return FfiConverterTypeMessage.lower(value)
-}
-
-
-
-
-
-
-/**
  * Controller that orchestrates migration execution
  *
  * ## Storage Architecture
@@ -6602,6 +6389,231 @@ public func FfiConverterTypeSafeSmartAccount_lift(_ handle: UInt64) throws -> Sa
 #endif
 public func FfiConverterTypeSafeSmartAccount_lower(_ value: SafeSmartAccount) -> UInt64 {
     return FfiConverterTypeSafeSmartAccount.lower(value)
+}
+
+
+
+
+
+
+/**
+ * An [EIP-4361](https://eips.ethereum.org/EIPS/eip-4361) Sign-In with Ethereum message.
+ */
+public protocol SiweMessageProtocol: AnyObject, Sendable {
+    
+    /**
+     * Signs this SIWE message with the given Safe smart account (EIP-191).
+     *
+     * # Errors
+     * - [`SiweError::Signing`] if the signing operation fails.
+     */
+    func sign(smartAccount: SafeSmartAccount) throws  -> HexEncodedData
+    
+    /**
+     * Computes a hash of the key attributes of the message for caching purposes.
+     *
+     * This is used for the "login automatically" feature where the client auto-signs
+     * for subsequent Mini Apps if the user approved it.
+     *
+     * # Panics
+     * Should never panic
+     */
+    func toCacheHash(scheme: String, currentUrlDomain: String)  -> HexEncodedData
+    
+    /**
+     * Returns the serialized EIP-4361 message string.
+     */
+    func toMessageString()  -> String
+    
+}
+/**
+ * An [EIP-4361](https://eips.ethereum.org/EIPS/eip-4361) Sign-In with Ethereum message.
+ */
+open class SiweMessage: SiweMessageProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_siwemessage(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_bedrock_fn_free_siwemessage(handle, $0) }
+    }
+
+    
+    /**
+     * Parses a SIWE message string, substituting the smart account's
+     * checksummed wallet address for the first `{address}` placeholder.
+     *
+     * # Arguments
+     * - `s`: The SIWE Message string.
+     * - `smart_account`: The user's smart account which is used to authenticate.
+     * - `authorized_url`: The expected pre-registered and authorized URL for SIWE
+     * messages. In practical terms this is the URL registered in the Developer Portal
+     * for the specific Mini App requesting authentication.
+     * - `querying_url`: The current URL from which the request is being made. In practical
+     * terms this is the current URL to which the webview is pointing.
+     *
+     * # Errors
+     * - [`SiweError::Parse`] if the message string is not valid EIP-4361.
+     * - [`SiweError::UnauthorizedHost`] if the different host validations don't match expected values.
+     */
+public static func fromStrWithAccount(s: String, smartAccount: SafeSmartAccount, authorizedUrl: String, queryingUrl: String)throws  -> SiweMessage  {
+    return try  FfiConverterTypeSiweMessage_lift(try rustCallWithError(FfiConverterTypeSiweError_lift) {
+    uniffi_bedrock_fn_constructor_siwemessage_from_str_with_account(
+        FfiConverterString.lower(s),
+        FfiConverterTypeSafeSmartAccount_lower(smartAccount),
+        FfiConverterString.lower(authorizedUrl),
+        FfiConverterString.lower(queryingUrl),$0
+    )
+})
+}
+    
+    /**
+     * Creates a SIWE message for World App authentication flows.
+     *
+     * # Errors
+     * - [`SiweError::InvalidBaseUrl`] if the base URL cannot be parsed.
+     */
+public static func fromWorldAppAuthRequest(flow: WorldAppAuthFlow, baseUrl: String, smartAccount: SafeSmartAccount)throws  -> SiweMessage  {
+    return try  FfiConverterTypeSiweMessage_lift(try rustCallWithError(FfiConverterTypeSiweError_lift) {
+    uniffi_bedrock_fn_constructor_siwemessage_from_world_app_auth_request(
+        FfiConverterTypeWorldAppAuthFlow_lower(flow),
+        FfiConverterString.lower(baseUrl),
+        FfiConverterTypeSafeSmartAccount_lower(smartAccount),$0
+    )
+})
+}
+    
+
+    
+    /**
+     * Signs this SIWE message with the given Safe smart account (EIP-191).
+     *
+     * # Errors
+     * - [`SiweError::Signing`] if the signing operation fails.
+     */
+open func sign(smartAccount: SafeSmartAccount)throws  -> HexEncodedData  {
+    return try  FfiConverterTypeHexEncodedData_lift(try rustCallWithError(FfiConverterTypeSiweError_lift) {
+    uniffi_bedrock_fn_method_siwemessage_sign(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeSafeSmartAccount_lower(smartAccount),$0
+    )
+})
+}
+    
+    /**
+     * Computes a hash of the key attributes of the message for caching purposes.
+     *
+     * This is used for the "login automatically" feature where the client auto-signs
+     * for subsequent Mini Apps if the user approved it.
+     *
+     * # Panics
+     * Should never panic
+     */
+open func toCacheHash(scheme: String, currentUrlDomain: String) -> HexEncodedData  {
+    return try!  FfiConverterTypeHexEncodedData_lift(try! rustCall() {
+    uniffi_bedrock_fn_method_siwemessage_to_cache_hash(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(scheme),
+        FfiConverterString.lower(currentUrlDomain),$0
+    )
+})
+}
+    
+    /**
+     * Returns the serialized EIP-4361 message string.
+     */
+open func toMessageString() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_bedrock_fn_method_siwemessage_to_message_string(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSiweMessage: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = SiweMessage
+
+    public static func lift(_ handle: UInt64) throws -> SiweMessage {
+        return SiweMessage(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: SiweMessage) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SiweMessage {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: SiweMessage, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSiweMessage_lift(_ handle: UInt64) throws -> SiweMessage {
+    return try FfiConverterTypeSiweMessage.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSiweMessage_lower(_ value: SiweMessage) -> UInt64 {
+    return FfiConverterTypeSiweMessage.lower(value)
 }
 
 
@@ -12432,6 +12444,23 @@ public enum SiweError: Swift.Error, Equatable, Hashable, Foundation.LocalizedErr
     case Signing(String
     )
     /**
+     * The requested messaged is not authorized. This could me a mismatched with the
+     * pre-authorized URL, the current integration URL or the requested resource in
+     * the message.
+     */
+    case UnauthorizedHost
+    /**
+     * A provided raw input could not be parsed, is incorrectly formatted, incorrectly encoded or otherwise invalid.
+     */
+    case InvalidInput(
+        /**
+         * The name of the attribute that was invalid.
+         */attribute: String, 
+        /**
+         * Explicit failure message for the attribute validation.
+         */errorMessage: String
+    )
+    /**
      * A generic error that can wrap any anyhow error.
      */
     case Generic(
@@ -12482,10 +12511,15 @@ public struct FfiConverterTypeSiweError: FfiConverterRustBuffer {
         case 3: return .Signing(
             try FfiConverterString.read(from: &buf)
             )
-        case 4: return .Generic(
+        case 4: return .UnauthorizedHost
+        case 5: return .InvalidInput(
+            attribute: try FfiConverterString.read(from: &buf), 
             errorMessage: try FfiConverterString.read(from: &buf)
             )
-        case 5: return .FileSystem(
+        case 6: return .Generic(
+            errorMessage: try FfiConverterString.read(from: &buf)
+            )
+        case 7: return .FileSystem(
             try FfiConverterTypeFileSystemError.read(from: &buf)
             )
 
@@ -12515,13 +12549,23 @@ public struct FfiConverterTypeSiweError: FfiConverterRustBuffer {
             FfiConverterString.write(v1, into: &buf)
             
         
-        case let .Generic(errorMessage):
+        case .UnauthorizedHost:
             writeInt(&buf, Int32(4))
+        
+        
+        case let .InvalidInput(attribute,errorMessage):
+            writeInt(&buf, Int32(5))
+            FfiConverterString.write(attribute, into: &buf)
+            FfiConverterString.write(errorMessage, into: &buf)
+            
+        
+        case let .Generic(errorMessage):
+            writeInt(&buf, Int32(6))
             FfiConverterString.write(errorMessage, into: &buf)
             
         
         case let .FileSystem(v1):
-            writeInt(&buf, Int32(5))
+            writeInt(&buf, Int32(7))
             FfiConverterTypeFileSystemError.write(v1, into: &buf)
             
         }
@@ -14042,13 +14086,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_rootkey_is_v0() != 24729) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_message_sign() != 19598) {
+    if (uniffi_bedrock_checksum_method_siwemessage_sign() != 11570) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_message_to_cache_hash() != 41959) {
+    if (uniffi_bedrock_checksum_method_siwemessage_to_cache_hash() != 46090) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_message_to_message_string() != 57230) {
+    if (uniffi_bedrock_checksum_method_siwemessage_to_message_string() != 22646) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_personal_sign() != 44448) {
@@ -14141,10 +14185,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_constructor_rootkey_new_random() != 47400) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_message_from_str_with_account() != 8893) {
+    if (uniffi_bedrock_checksum_constructor_siwemessage_from_str_with_account() != 17711) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_message_from_world_app_auth_request() != 8222) {
+    if (uniffi_bedrock_checksum_constructor_siwemessage_from_world_app_auth_request() != 41011) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_safesmartaccount_new() != 35976) {
