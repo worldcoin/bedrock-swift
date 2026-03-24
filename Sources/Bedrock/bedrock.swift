@@ -6415,10 +6415,10 @@ public protocol SiweMessageProtocol: AnyObject, Sendable {
      * This is used for the "login automatically" feature where the client auto-signs
      * for subsequent Mini Apps if the user approved it.
      *
-     * # Panics
-     * Should never panic
+     * # Errors
+     * - If the provided `current_url` is not valid
      */
-    func toCacheHash(scheme: String, currentUrlDomain: String)  -> HexEncodedData
+    func toCacheHash(currentUrl: String) throws  -> HexEncodedData
     
     /**
      * Returns the serialized EIP-4361 message string.
@@ -6547,15 +6547,14 @@ open func sign(smartAccount: SafeSmartAccount)throws  -> HexEncodedData  {
      * This is used for the "login automatically" feature where the client auto-signs
      * for subsequent Mini Apps if the user approved it.
      *
-     * # Panics
-     * Should never panic
+     * # Errors
+     * - If the provided `current_url` is not valid
      */
-open func toCacheHash(scheme: String, currentUrlDomain: String) -> HexEncodedData  {
-    return try!  FfiConverterTypeHexEncodedData_lift(try! rustCall() {
+open func toCacheHash(currentUrl: String)throws  -> HexEncodedData  {
+    return try  FfiConverterTypeHexEncodedData_lift(try rustCallWithError(FfiConverterTypeSiweError_lift) {
     uniffi_bedrock_fn_method_siwemessage_to_cache_hash(
             self.uniffiCloneHandle(),
-        FfiConverterString.lower(scheme),
-        FfiConverterString.lower(currentUrlDomain),$0
+        FfiConverterString.lower(currentUrl),$0
     )
 })
 }
@@ -14089,7 +14088,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_siwemessage_sign() != 11570) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_siwemessage_to_cache_hash() != 46090) {
+    if (uniffi_bedrock_checksum_method_siwemessage_to_cache_hash() != 24625) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_siwemessage_to_message_string() != 22646) {
