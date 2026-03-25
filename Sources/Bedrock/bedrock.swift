@@ -2388,6 +2388,156 @@ public func FfiConverterTypeDeviceKeyValueStore_lower(_ value: DeviceKeyValueSto
 
 
 /**
+ * Trait to allow EIP-191 signing for structs that cross foreign boundaries.
+ *
+ * This is used to support both [`SafeSmartAccount`] and [`EoaSigner`]. Generally,
+ * the [`EoaSigner`] is only used for signing SIWE messages to authenticate against
+ * the app backend.
+ */
+public protocol Eip191SignerProtocol: AnyObject, Sendable {
+    
+    /**
+     * Signs an EIP-191 message (`personal_sign` Message; version: `0x45`).
+     * Reference: <https://eips.ethereum.org/EIPS/eip-191#version-0x45-e>
+     *
+     * The message will be prefixed with the EIP-191 prefix `"\x19Ethereum Signed Message:\n"`.
+     *
+     * # Errors
+     * - Will throw an error if the signature process fails.
+     */
+    func signEip191(message: Data, chainId: UInt32) throws  -> HexEncodedData
+    
+}
+/**
+ * Trait to allow EIP-191 signing for structs that cross foreign boundaries.
+ *
+ * This is used to support both [`SafeSmartAccount`] and [`EoaSigner`]. Generally,
+ * the [`EoaSigner`] is only used for signing SIWE messages to authenticate against
+ * the app backend.
+ */
+open class Eip191Signer: Eip191SignerProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_eip191signer(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_bedrock_fn_free_eip191signer(handle, $0) }
+    }
+
+    
+
+    
+    /**
+     * Signs an EIP-191 message (`personal_sign` Message; version: `0x45`).
+     * Reference: <https://eips.ethereum.org/EIPS/eip-191#version-0x45-e>
+     *
+     * The message will be prefixed with the EIP-191 prefix `"\x19Ethereum Signed Message:\n"`.
+     *
+     * # Errors
+     * - Will throw an error if the signature process fails.
+     */
+open func signEip191(message: Data, chainId: UInt32)throws  -> HexEncodedData  {
+    return try  FfiConverterTypeHexEncodedData_lift(try rustCallWithError(FfiConverterTypeSafeSmartAccountError_lift) {
+    uniffi_bedrock_fn_method_eip191signer_sign_eip_191(
+            self.uniffiCloneHandle(),
+        FfiConverterData.lower(message),
+        FfiConverterUInt32.lower(chainId),$0
+    )
+})
+}
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeEIP191Signer: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = Eip191Signer
+
+    public static func lift(_ handle: UInt64) throws -> Eip191Signer {
+        return Eip191Signer(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: Eip191Signer) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Eip191Signer {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: Eip191Signer, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeEIP191Signer_lift(_ handle: UInt64) throws -> Eip191Signer {
+    return try FfiConverterTypeEIP191Signer.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeEIP191Signer_lower(_ value: Eip191Signer) -> UInt64 {
+    return FfiConverterTypeEIP191Signer.lower(value)
+}
+
+
+
+
+
+
+/**
  * Verifies AWS Nitro Enclave attestation documents
  *
  * This class performs comprehensive verification of attestation documents including:
@@ -2609,6 +2759,132 @@ public func FfiConverterTypeEnclaveAttestationVerifier_lift(_ handle: UInt64) th
 #endif
 public func FfiConverterTypeEnclaveAttestationVerifier_lower(_ value: EnclaveAttestationVerifier) -> UInt64 {
     return FfiConverterTypeEnclaveAttestationVerifier.lower(value)
+}
+
+
+
+
+
+
+/**
+ * Plain EOA signer for EIP-191 `personal_sign` (no Safe wrapping).
+ */
+public protocol EoaSignerProtocol: AnyObject, Sendable {
+    
+}
+/**
+ * Plain EOA signer for EIP-191 `personal_sign` (no Safe wrapping).
+ */
+open class EoaSigner: EoaSignerProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_eoasigner(self.handle, $0) }
+    }
+    /**
+     * Creates a new EOA signer from a hex-encoded private key.
+     *
+     * # Errors
+     * - `SafeSmartAccountError::KeyDecoding` if the key is invalid.
+     */
+public convenience init(privateKey: String)throws  {
+    let handle =
+        try rustCallWithError(FfiConverterTypeSafeSmartAccountError_lift) {
+    uniffi_bedrock_fn_constructor_eoasigner_new(
+        FfiConverterString.lower(privateKey),$0
+    )
+}
+    self.init(unsafeFromHandle: handle)
+}
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_bedrock_fn_free_eoasigner(handle, $0) }
+    }
+
+    
+
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeEoaSigner: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = EoaSigner
+
+    public static func lift(_ handle: UInt64) throws -> EoaSigner {
+        return EoaSigner(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: EoaSigner) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> EoaSigner {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: EoaSigner, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeEoaSigner_lift(_ handle: UInt64) throws -> EoaSigner {
+    return try FfiConverterTypeEoaSigner.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeEoaSigner_lower(_ value: EoaSigner) -> UInt64 {
+    return FfiConverterTypeEoaSigner.lower(value)
 }
 
 
@@ -6407,7 +6683,7 @@ public protocol SiweMessageProtocol: AnyObject, Sendable {
      * # Errors
      * - [`SiweError::Signing`] if the signing operation fails.
      */
-    func sign(smartAccount: SafeSmartAccount) throws  -> HexEncodedData
+    func sign(signer: Eip191Signer) throws  -> HexEncodedData
     
     /**
      * Computes a hash of the key attributes of the message for caching purposes.
@@ -6511,6 +6787,9 @@ public static func fromStrWithAccount(s: String, smartAccount: SafeSmartAccount,
     /**
      * Creates a SIWE message for World App authentication flows.
      *
+     * Importantly, SIWE messages for World App auth uses the EOA address,
+     * not the wallet address for authentication.
+     *
      * # Errors
      * - [`SiweError::InvalidBaseUrl`] if the base URL cannot be parsed.
      */
@@ -6532,11 +6811,11 @@ public static func fromWorldAppAuthRequest(flow: WorldAppAuthFlow, baseUrl: Stri
      * # Errors
      * - [`SiweError::Signing`] if the signing operation fails.
      */
-open func sign(smartAccount: SafeSmartAccount)throws  -> HexEncodedData  {
+open func sign(signer: Eip191Signer)throws  -> HexEncodedData  {
     return try  FfiConverterTypeHexEncodedData_lift(try rustCallWithError(FfiConverterTypeSiweError_lift) {
     uniffi_bedrock_fn_method_siwemessage_sign(
             self.uniffiCloneHandle(),
-        FfiConverterTypeSafeSmartAccount_lower(smartAccount),$0
+        FfiConverterTypeEIP191Signer_lower(signer),$0
     )
 })
 }
@@ -14085,7 +14364,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_rootkey_is_v0() != 24729) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_siwemessage_sign() != 11570) {
+    if (uniffi_bedrock_checksum_method_siwemessage_sign() != 58794) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_siwemessage_to_cache_hash() != 24625) {
@@ -14145,6 +14424,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_safesmartaccount_send_bundler_sponsored_user_operation() != 62094) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_method_eip191signer_sign_eip_191() != 15753) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_constructor_backupmanager_new() != 27832) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -14187,10 +14469,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_constructor_siwemessage_from_str_with_account() != 17711) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_siwemessage_from_world_app_auth_request() != 41011) {
+    if (uniffi_bedrock_checksum_constructor_siwemessage_from_world_app_auth_request() != 51378) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_safesmartaccount_new() != 35976) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_constructor_eoasigner_new() != 47975) {
         return InitializationResult.apiChecksumMismatch
     }
 
