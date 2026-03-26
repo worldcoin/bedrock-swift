@@ -2495,7 +2495,7 @@ open func signEip191(message: Data, chainId: UInt32)throws  -> HexEncodedData  {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public struct FfiConverterTypeEIP191Signer: FfiConverter {
+public struct FfiConverterTypeEip191Signer: FfiConverter {
     typealias FfiType = UInt64
     typealias SwiftType = Eip191Signer
 
@@ -2521,15 +2521,15 @@ public struct FfiConverterTypeEIP191Signer: FfiConverter {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeEIP191Signer_lift(_ handle: UInt64) throws -> Eip191Signer {
-    return try FfiConverterTypeEIP191Signer.lift(handle)
+public func FfiConverterTypeEip191Signer_lift(_ handle: UInt64) throws -> Eip191Signer {
+    return try FfiConverterTypeEip191Signer.lift(handle)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeEIP191Signer_lower(_ value: Eip191Signer) -> UInt64 {
-    return FfiConverterTypeEIP191Signer.lower(value)
+public func FfiConverterTypeEip191Signer_lower(_ value: Eip191Signer) -> UInt64 {
+    return FfiConverterTypeEip191Signer.lower(value)
 }
 
 
@@ -2771,6 +2771,11 @@ public func FfiConverterTypeEnclaveAttestationVerifier_lower(_ value: EnclaveAtt
  */
 public protocol EoaSignerProtocol: AnyObject, Sendable {
     
+    /**
+     * Explicit declaration to comply with [`Eip191Signer`] trait.
+     */
+    func asEip191Signer()  -> Eip191Signer
+    
 }
 /**
  * Plain EOA signer for EIP-191 `personal_sign` (no Safe wrapping).
@@ -2841,6 +2846,17 @@ public convenience init(privateKey: String)throws  {
 
     
 
+    
+    /**
+     * Explicit declaration to comply with [`Eip191Signer`] trait.
+     */
+open func asEip191Signer() -> Eip191Signer  {
+    return try!  FfiConverterTypeEip191Signer_lift(try! rustCall() {
+    uniffi_bedrock_fn_method_eoasigner_as_eip191_signer(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
     
 
     
@@ -5761,6 +5777,11 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
     func signTypedData(chainId: UInt32, stringifiedTypedData: String) throws  -> HexEncodedData
     
     /**
+     * Explicit declaration to comply with [`Eip191Signer`] trait.
+     */
+    func asEip191Signer()  -> Eip191Signer
+    
+    /**
      * Deposits tokens into an ERC4626 vault on World Chain.
      *
      * This method uses the generic ERC4626 implementation that queries the vault's
@@ -6214,6 +6235,17 @@ open func signTypedData(chainId: UInt32, stringifiedTypedData: String)throws  ->
             self.uniffiCloneHandle(),
         FfiConverterUInt32.lower(chainId),
         FfiConverterString.lower(stringifiedTypedData),$0
+    )
+})
+}
+    
+    /**
+     * Explicit declaration to comply with [`Eip191Signer`] trait.
+     */
+open func asEip191Signer() -> Eip191Signer  {
+    return try!  FfiConverterTypeEip191Signer_lift(try! rustCall() {
+    uniffi_bedrock_fn_method_safesmartaccount_as_eip191_signer(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
@@ -6815,7 +6847,7 @@ open func sign(signer: Eip191Signer)throws  -> HexEncodedData  {
     return try  FfiConverterTypeHexEncodedData_lift(try rustCallWithError(FfiConverterTypeSiweError_lift) {
     uniffi_bedrock_fn_method_siwemessage_sign(
             self.uniffiCloneHandle(),
-        FfiConverterTypeEIP191Signer_lower(signer),$0
+        FfiConverterTypeEip191Signer_lower(signer),$0
     )
 })
 }
@@ -14364,7 +14396,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_rootkey_is_v0() != 24729) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_siwemessage_sign() != 58794) {
+    if (uniffi_bedrock_checksum_method_siwemessage_sign() != 10511) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_siwemessage_to_cache_hash() != 24625) {
@@ -14386,6 +14418,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_sign_typed_data() != 12862) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_safesmartaccount_as_eip191_signer() != 54864) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_erc4626_deposit() != 11491) {
@@ -14424,7 +14459,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_safesmartaccount_send_bundler_sponsored_user_operation() != 62094) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_eip191signer_sign_eip_191() != 15753) {
+    if (uniffi_bedrock_checksum_method_eip191signer_sign_eip_191() != 29470) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_eoasigner_as_eip191_signer() != 35398) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_backupmanager_new() != 27832) {
