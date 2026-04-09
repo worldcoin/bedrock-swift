@@ -4723,12 +4723,12 @@ open class MigrationController: MigrationControllerProtocol, @unchecked Sendable
      *
      * Additional processors passed via `additional_processors` are appended after the defaults.
      */
-public convenience init(kvStore: DeviceKeyValueStore, safeAccount: SafeSmartAccount, additionalProcessors: [MigrationProcessor]) {
+public convenience init(kvStore: DeviceKeyValueStore, safeAccount: SafeSmartAccount?, additionalProcessors: [MigrationProcessor]) {
     let handle =
         try! rustCall() {
     uniffi_bedrock_fn_constructor_migrationcontroller_new(
         FfiConverterTypeDeviceKeyValueStore_lower(kvStore),
-        FfiConverterTypeSafeSmartAccount_lower(safeAccount),
+        FfiConverterOptionTypeSafeSmartAccount.lower(safeAccount),
         FfiConverterSequenceTypeMigrationProcessor.lower(additionalProcessors),$0
     )
 }
@@ -6726,9 +6726,14 @@ public func FfiConverterTypeSafeSmartAccount_lower(_ value: SafeSmartAccount) ->
 public protocol SiweMessageProtocol: AnyObject, Sendable {
     
     /**
-     * The Ethereum address performing the SIWE signing.
+     * Returns the `address` of the message.
      */
     func address()  -> BedrockAddress
+    
+    /**
+     * Returns the `domain` of the message.
+     */
+    func domain()  -> String
     
     /**
      * Signs this SIWE message with the given Safe smart account (EIP-191).
@@ -6737,6 +6742,11 @@ public protocol SiweMessageProtocol: AnyObject, Sendable {
      * - [`SiweError::Signing`] if the signing operation fails.
      */
     func sign(signer: Eip191Signer) throws  -> HexEncodedData
+    
+    /**
+     * Returns the `statement` of the message.
+     */
+    func statement()  -> String?
     
     /**
      * Computes a hash of the key attributes of the message for caching purposes.
@@ -6859,11 +6869,22 @@ public static func fromWorldAppAuthRequest(flow: WorldAppAuthFlow, baseUrl: Stri
 
     
     /**
-     * The Ethereum address performing the SIWE signing.
+     * Returns the `address` of the message.
      */
 open func address() -> BedrockAddress  {
     return try!  FfiConverterTypeBedrockAddress_lift(try! rustCall() {
     uniffi_bedrock_fn_method_siwemessage_address(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+    /**
+     * Returns the `domain` of the message.
+     */
+open func domain() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_bedrock_fn_method_siwemessage_domain(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -6880,6 +6901,17 @@ open func sign(signer: Eip191Signer)throws  -> HexEncodedData  {
     uniffi_bedrock_fn_method_siwemessage_sign(
             self.uniffiCloneHandle(),
         FfiConverterTypeEip191Signer_lower(signer),$0
+    )
+})
+}
+    
+    /**
+     * Returns the `statement` of the message.
+     */
+open func statement() -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+    uniffi_bedrock_fn_method_siwemessage_statement(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
@@ -13560,6 +13592,30 @@ fileprivate struct FfiConverterOptionTypeBedrockConfig: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeSafeSmartAccount: FfiConverterRustBuffer {
+    typealias SwiftType = SafeSmartAccount?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeSafeSmartAccount.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeSafeSmartAccount.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeOs: FfiConverterRustBuffer {
     typealias SwiftType = Os?
 
@@ -14438,10 +14494,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_rootkey_is_v0() != 24729) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_siwemessage_address() != 9633) {
+    if (uniffi_bedrock_checksum_method_siwemessage_address() != 32221) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_siwemessage_domain() != 40663) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_siwemessage_sign() != 10511) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_siwemessage_statement() != 11389) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_siwemessage_to_cache_hash() != 24625) {
@@ -14522,7 +14584,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_constructor_turnkey_new() != 46031) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_migrationcontroller_new() != 42584) {
+    if (uniffi_bedrock_checksum_constructor_migrationcontroller_new() != 60371) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_enclaveattestationverifier_new() != 36598) {
