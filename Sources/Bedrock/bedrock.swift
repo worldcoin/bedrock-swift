@@ -2772,6 +2772,11 @@ public func FfiConverterTypeEnclaveAttestationVerifier_lower(_ value: EnclaveAtt
 public protocol EoaSignerProtocol: AnyObject, Sendable {
     
     /**
+     * Returns the ETH address associated with this signer.
+     */
+    func address()  -> BedrockAddress
+    
+    /**
      * Explicit declaration to comply with [`Eip191Signer`] trait.
      */
     func asEip191Signer()  -> Eip191Signer
@@ -2846,6 +2851,17 @@ public convenience init(privateKey: String)throws  {
 
     
 
+    
+    /**
+     * Returns the ETH address associated with this signer.
+     */
+open func address() -> BedrockAddress  {
+    return try!  FfiConverterTypeBedrockAddress_lift(try! rustCall() {
+    uniffi_bedrock_fn_method_eoasigner_address(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
     
     /**
      * Explicit declaration to comply with [`Eip191Signer`] trait.
@@ -6710,6 +6726,11 @@ public func FfiConverterTypeSafeSmartAccount_lower(_ value: SafeSmartAccount) ->
 public protocol SiweMessageProtocol: AnyObject, Sendable {
     
     /**
+     * The Ethereum address performing the SIWE signing.
+     */
+    func address()  -> BedrockAddress
+    
+    /**
      * Signs this SIWE message with the given Safe smart account (EIP-191).
      *
      * # Errors
@@ -6825,17 +6846,28 @@ public static func fromStrWithAccount(s: String, smartAccount: SafeSmartAccount,
      * # Errors
      * - [`SiweError::InvalidBaseUrl`] if the base URL cannot be parsed.
      */
-public static func fromWorldAppAuthRequest(flow: WorldAppAuthFlow, baseUrl: String, smartAccount: SafeSmartAccount)throws  -> SiweMessage  {
+public static func fromWorldAppAuthRequest(flow: WorldAppAuthFlow, baseUrl: String, eoaSigner: EoaSigner)throws  -> SiweMessage  {
     return try  FfiConverterTypeSiweMessage_lift(try rustCallWithError(FfiConverterTypeSiweError_lift) {
     uniffi_bedrock_fn_constructor_siwemessage_from_world_app_auth_request(
         FfiConverterTypeWorldAppAuthFlow_lower(flow),
         FfiConverterString.lower(baseUrl),
-        FfiConverterTypeSafeSmartAccount_lower(smartAccount),$0
+        FfiConverterTypeEoaSigner_lower(eoaSigner),$0
     )
 })
 }
     
 
+    
+    /**
+     * The Ethereum address performing the SIWE signing.
+     */
+open func address() -> BedrockAddress  {
+    return try!  FfiConverterTypeBedrockAddress_lift(try! rustCall() {
+    uniffi_bedrock_fn_method_siwemessage_address(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
     
     /**
      * Signs this SIWE message with the given Safe smart account (EIP-191).
@@ -9841,6 +9873,10 @@ public enum BackupFileDesignator: Equatable, Hashable {
      * Credential storage vault (plaintext export of account.vault.sqlite)
      */
     case credentialVault
+    /**
+     * Face Personal Custody Package (PCP) or "Face Credential"
+     */
+    case facePkg
 
 
 
@@ -9868,6 +9904,8 @@ public struct FfiConverterTypeBackupFileDesignator: FfiConverterRustBuffer {
         
         case 3: return .credentialVault
         
+        case 4: return .facePkg
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -9886,6 +9924,10 @@ public struct FfiConverterTypeBackupFileDesignator: FfiConverterRustBuffer {
         
         case .credentialVault:
             writeInt(&buf, Int32(3))
+        
+        
+        case .facePkg:
+            writeInt(&buf, Int32(4))
         
         }
     }
@@ -14396,6 +14438,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_rootkey_is_v0() != 24729) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_method_siwemessage_address() != 9633) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_method_siwemessage_sign() != 10511) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -14462,6 +14507,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_eip191signer_sign_eip_191() != 29470) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_method_eoasigner_address() != 40956) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_method_eoasigner_as_eip191_signer() != 35398) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -14507,7 +14555,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_constructor_siwemessage_from_str_with_account() != 17711) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_siwemessage_from_world_app_auth_request() != 51378) {
+    if (uniffi_bedrock_checksum_constructor_siwemessage_from_world_app_auth_request() != 38309) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_safesmartaccount_new() != 35976) {
