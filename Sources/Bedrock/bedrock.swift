@@ -6836,12 +6836,12 @@ open class SiweMessage: SiweMessageProtocol, @unchecked Sendable {
      * - [`SiweError::Parse`] if the message string is not valid EIP-4361.
      * - [`SiweError::UnauthorizedHost`] if the different host validations don't match expected values.
      */
-public static func fromStrWithAccount(s: String, smartAccount: SafeSmartAccount, authorizedUrl: String, queryingUrl: String)throws  -> SiweMessage  {
+public static func fromStrWithAccount(s: String, smartAccount: SafeSmartAccount, authorizedUrls: [String], queryingUrl: String)throws  -> SiweMessage  {
     return try  FfiConverterTypeSiweMessage_lift(try rustCallWithError(FfiConverterTypeSiweError_lift) {
     uniffi_bedrock_fn_constructor_siwemessage_from_str_with_account(
         FfiConverterString.lower(s),
         FfiConverterTypeSafeSmartAccount_lower(smartAccount),
-        FfiConverterString.lower(authorizedUrl),
+        FfiConverterSequenceString.lower(authorizedUrls),
         FfiConverterString.lower(queryingUrl),$0
     )
 })
@@ -14614,7 +14614,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_constructor_rootkey_new_random() != 47400) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_siwemessage_from_str_with_account() != 17711) {
+    if (uniffi_bedrock_checksum_constructor_siwemessage_from_str_with_account() != 10910) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_siwemessage_from_world_app_auth_request() != 38309) {
