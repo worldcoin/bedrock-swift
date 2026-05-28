@@ -9909,6 +9909,10 @@ public enum BackupFileDesignator: Equatable, Hashable {
      * Face Personal Custody Package (PCP) or "Face Credential"
      */
     case facePkg
+    /**
+     * Anonymized user IDs and associated requests per Relying Party
+     */
+    case anonymizedThirdPartyAnalytics
 
 
 
@@ -9938,6 +9942,8 @@ public struct FfiConverterTypeBackupFileDesignator: FfiConverterRustBuffer {
         
         case 4: return .facePkg
         
+        case 5: return .anonymizedThirdPartyAnalytics
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -9960,6 +9966,10 @@ public struct FfiConverterTypeBackupFileDesignator: FfiConverterRustBuffer {
         
         case .facePkg:
             writeInt(&buf, Int32(4))
+        
+        
+        case .anonymizedThirdPartyAnalytics:
+            writeInt(&buf, Int32(5))
         
         }
     }
