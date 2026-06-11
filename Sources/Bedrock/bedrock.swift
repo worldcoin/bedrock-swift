@@ -893,7 +893,7 @@ public protocol BackupManagerProtocol: AnyObject, Sendable {
     
     /**
      * Adds new factor by re-encrypting the backup keypair (not the backup itself!)
-     * with a new factor secret.
+     * with a new factor secret. (See BF-3 Adding a Main Faactor)
      *
      * * `encrypted_backup_key_with_existing_factor_secret` - is the backup keypair that was
      * encrypted with the existing factor secret. Hex encoded.
@@ -1125,7 +1125,7 @@ public convenience init() {
     
     /**
      * Adds new factor by re-encrypting the backup keypair (not the backup itself!)
-     * with a new factor secret.
+     * with a new factor secret. (See BF-3 Adding a Main Faactor)
      *
      * * `encrypted_backup_key_with_existing_factor_secret` - is the backup keypair that was
      * encrypted with the existing factor secret. Hex encoded.
@@ -7633,6 +7633,340 @@ public func FfiConverterTypeTurnkey_lower(_ value: Turnkey) -> UInt64 {
 
 
 
+
+
+/**
+ * Represents a complete HTTP `User-Agent` header value.
+ */
+public protocol UserAgentProtocol: AnyObject, Sendable {
+    
+    /**
+     * Returns the complete HTTP `User-Agent` header value.
+     */
+    func headerValue()  -> String
+    
+}
+/**
+ * Represents a complete HTTP `User-Agent` header value.
+ */
+open class UserAgent: UserAgentProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_useragent(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_bedrock_fn_free_useragent(handle, $0) }
+    }
+
+    
+
+    
+    /**
+     * Returns the complete HTTP `User-Agent` header value.
+     */
+open func headerValue() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_bedrock_fn_method_useragent_header_value(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeUserAgent: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = UserAgent
+
+    public static func lift(_ handle: UInt64) throws -> UserAgent {
+        return UserAgent(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: UserAgent) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UserAgent {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: UserAgent, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUserAgent_lift(_ handle: UInt64) throws -> UserAgent {
+    return try FfiConverterTypeUserAgent.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUserAgent_lower(_ value: UserAgent) -> UInt64 {
+    return FfiConverterTypeUserAgent.lower(value)
+}
+
+
+
+
+
+
+/**
+ * Builds the [`UserAgent`] string sent as the HTTP `User-Agent` header.
+ *
+ * Starts empty; call [`Self::with_segment`] for arbitrary `name/version`
+ * tokens and the Bedrock-specific helpers for app, library, and client
+ * segments.
+ */
+public protocol UserAgentBuilderProtocol: AnyObject, Sendable {
+    
+    /**
+     * Finalizes the header value as [`UserAgent`].
+     */
+    func build()  -> UserAgent
+    
+    /**
+     * Appends the app product segment for the client name.
+     *
+     * Uses `WorldID/{app_version}` for World ID app clients
+     * (`android-id` / `ios-id`), and `WorldApp/{app_version}` for all
+     * other clients.
+     */
+    func withAppSegmentForClient(appVersion: String, clientName: String)  -> UserAgentBuilder
+    
+    /**
+     * Appends `bedrock/{crate version}`.
+     */
+    func withBedrockSegment()  -> UserAgentBuilder
+    
+    /**
+     * Appends an arbitrary `name/version` segment.
+     */
+    func withSegment(name: String, version: String)  -> UserAgentBuilder
+    
+}
+/**
+ * Builds the [`UserAgent`] string sent as the HTTP `User-Agent` header.
+ *
+ * Starts empty; call [`Self::with_segment`] for arbitrary `name/version`
+ * tokens and the Bedrock-specific helpers for app, library, and client
+ * segments.
+ */
+open class UserAgentBuilder: UserAgentBuilderProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_useragentbuilder(self.handle, $0) }
+    }
+    /**
+     * Creates an empty [`UserAgentBuilder`].
+     */
+public convenience init() {
+    let handle =
+        try! rustCall() {
+    uniffi_bedrock_fn_constructor_useragentbuilder_new($0
+    )
+}
+    self.init(unsafeFromHandle: handle)
+}
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_bedrock_fn_free_useragentbuilder(handle, $0) }
+    }
+
+    
+
+    
+    /**
+     * Finalizes the header value as [`UserAgent`].
+     */
+open func build() -> UserAgent  {
+    return try!  FfiConverterTypeUserAgent_lift(try! rustCall() {
+    uniffi_bedrock_fn_method_useragentbuilder_build(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+    /**
+     * Appends the app product segment for the client name.
+     *
+     * Uses `WorldID/{app_version}` for World ID app clients
+     * (`android-id` / `ios-id`), and `WorldApp/{app_version}` for all
+     * other clients.
+     */
+open func withAppSegmentForClient(appVersion: String, clientName: String) -> UserAgentBuilder  {
+    return try!  FfiConverterTypeUserAgentBuilder_lift(try! rustCall() {
+    uniffi_bedrock_fn_method_useragentbuilder_with_app_segment_for_client(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(appVersion),
+        FfiConverterString.lower(clientName),$0
+    )
+})
+}
+    
+    /**
+     * Appends `bedrock/{crate version}`.
+     */
+open func withBedrockSegment() -> UserAgentBuilder  {
+    return try!  FfiConverterTypeUserAgentBuilder_lift(try! rustCall() {
+    uniffi_bedrock_fn_method_useragentbuilder_with_bedrock_segment(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+    /**
+     * Appends an arbitrary `name/version` segment.
+     */
+open func withSegment(name: String, version: String) -> UserAgentBuilder  {
+    return try!  FfiConverterTypeUserAgentBuilder_lift(try! rustCall() {
+    uniffi_bedrock_fn_method_useragentbuilder_with_segment(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(name),
+        FfiConverterString.lower(version),$0
+    )
+})
+}
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeUserAgentBuilder: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = UserAgentBuilder
+
+    public static func lift(_ handle: UInt64) throws -> UserAgentBuilder {
+        return UserAgentBuilder(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: UserAgentBuilder) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UserAgentBuilder {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: UserAgentBuilder, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUserAgentBuilder_lift(_ handle: UInt64) throws -> UserAgentBuilder {
+    return try FfiConverterTypeUserAgentBuilder.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUserAgentBuilder_lower(_ value: UserAgentBuilder) -> UInt64 {
+    return FfiConverterTypeUserAgentBuilder.lower(value)
+}
+
+
+
+
 /**
  * Result of re-encrypting the backup keypair with a new factor secret.
  */
@@ -9553,6 +9887,8 @@ public func FfiConverterTypeWorldGiftManagerResult_lower(_ value: WorldGiftManag
 
 /**
  * Errors that can occur when working with backups and manifests.
+ *
+ * Further error documentation: <https://docs.toolsforhumanity.com/world-app/backup/components#what-the-service-rejects>
  */
 public enum BackupError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
@@ -14318,7 +14654,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_func_verify_bundler_rpc_entrypoint() != 40638) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_backupmanager_add_new_factor() != 55596) {
+    if (uniffi_bedrock_checksum_method_backupmanager_add_new_factor() != 7884) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_backupmanager_create_sealed_backup_for_new_user() != 22156) {
@@ -14495,6 +14831,21 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_toolingdemo_test_log_levels() != 27236) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_method_useragent_header_value() != 44994) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_useragentbuilder_build() != 64336) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_useragentbuilder_with_app_segment_for_client() != 48327) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_useragentbuilder_with_bedrock_segment() != 31505) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_useragentbuilder_with_segment() != 48407) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_method_rootkey_derive_public_backup_account_id() != 33225) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -14616,6 +14967,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_toolingdemo_new() != 2212) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_constructor_useragentbuilder_new() != 35070) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_rootkey_from_json() != 31365) {
