@@ -5707,40 +5707,45 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
      * - Will throw an error if the signature process unexpectedly fails.
      *
      * # Examples
-     * ```rust
-     * use bedrock::smart_account::{SafeSmartAccount};
+     * ```no_run
+     * use std::sync::Arc;
+     * use bedrock::smart_account::{
+     * SafeSmartAccount, SafeSmartAccountError, SmartAccountKeyManager,
+     * };
      * use bedrock::transactions::foreign::UnparsedUserOperation;
      * use bedrock::primitives::Network;
      *
+     * fn sign(
+     * key_manager: Arc<dyn SmartAccountKeyManager>,
+     * ) -> Result<(), SafeSmartAccountError> {
      * let safe = SafeSmartAccount::new(
-     * // this is Anvil's default private key, it is a test secret
-     * "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".to_string(),
+     * key_manager,
      * "0x4564420674EA68fcc61b463C0494807C759d47e6",
-     * )
-     * .unwrap();
+     * )?;
      *
-     * // This would normally be crafted by the user, or requested by Mini Apps.
+     * // Crafted by the user, or requested by Mini Apps.
      * let user_op = UnparsedUserOperation {
-     * sender:"0xf1390a26bd60d83a4e38c7be7be1003c616296ad".to_string(),
-     * nonce: "0xb14292cd79fae7d79284d4e6304fb58e21d579c13a75eed80000000000000000".to_string(),
-     * call_data:  "0x7bb3742800000000000000000000000079a02482a880bce3f13e09da970dc34db4cd24d10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000044a9059cbb000000000000000000000000ce2111f9ab8909b71ebadc9b6458daefe069eda4000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000".to_string(),
-     * signature:  "0x000012cea6000000967a7600ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
-     * call_gas_limit: "0xabb8".to_string(),
-     * verification_gas_limit: "0xfa07".to_string(),
-     * pre_verification_gas: "0x8e4d78".to_string(),
-     * max_fee_per_gas: "0x1af6f".to_string(),
-     * max_priority_fee_per_gas: "0x1adb0".to_string(),
-     * paymaster: Some("0xEF725Aa22d43Ea69FB22bE2EBe6ECa205a6BCf5B".to_string()),
-     * paymaster_verification_gas_limit: Some("0x7415".to_string()),
-     * paymaster_post_op_gas_limit: Some("0x".to_string()),
-     * paymaster_data: Some("000000000000000067789a97c4af0f8ae7acc9237c8f9611a0eb4662009d366b8defdf5f68fed25d22ca77be64b8eef49d917c3f8642ca539571594a84be9d0ee717c099160b79a845bea2111b".to_string()),
+     * sender: "0xf1390a26bd60d83a4e38c7be7be1003c616296ad".to_string(),
+     * nonce: "0x0".to_string(),
+     * call_data: "0x".to_string(),
+     * signature: "0x".to_string(),
+     * call_gas_limit: "0x0".to_string(),
+     * verification_gas_limit: "0x0".to_string(),
+     * pre_verification_gas: "0x0".to_string(),
+     * max_fee_per_gas: "0x0".to_string(),
+     * max_priority_fee_per_gas: "0x0".to_string(),
+     * paymaster: None,
+     * paymaster_verification_gas_limit: None,
+     * paymaster_post_op_gas_limit: None,
+     * paymaster_data: None,
      * factory: None,
      * factory_data: None,
      * };
      *
-     * let signature = safe.sign_4337_op(Network::WorldChain as u32, user_op).unwrap();
-     *
+     * let signature = safe.sign_4337_op(Network::WorldChain as u32, user_op)?;
      * println!("Signature: {}", signature.to_hex_string());
+     * Ok(())
+     * }
      * ```
      */
     func sign4337Op(chainId: UInt32, userOperation: UnparsedUserOperation) throws  -> HexEncodedData
@@ -5878,14 +5883,17 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
      *
      * # Example
      *
-     * ```rust,no_run
-     * use bedrock::smart_account::SafeSmartAccount;
+     * ```no_run
+     * use std::sync::Arc;
+     * use bedrock::smart_account::{SafeSmartAccount, SmartAccountKeyManager};
      * use bedrock::transactions::TransactionError;
      * use bedrock::primitives::Network;
      *
-     * # async fn example() -> Result<(), TransactionError> {
+     * # async fn example(
+     * #     key_manager: Arc<dyn SmartAccountKeyManager>,
+     * # ) -> Result<(), TransactionError> {
      * // Assume we have a configured SafeSmartAccount
-     * # let safe_account = SafeSmartAccount::new("test_key".to_string(), "0x1234567890123456789012345678901234567890").unwrap();
+     * # let safe_account = SafeSmartAccount::new(key_manager, "0x1234567890123456789012345678901234567890").unwrap();
      *
      * // Transfer USDC on World Chain
      * let tx_hash = safe_account.transaction_transfer(
@@ -6069,24 +6077,32 @@ open class SafeSmartAccount: SafeSmartAccountProtocol, @unchecked Sendable {
         return try! rustCall { uniffi_bedrock_fn_clone_safesmartaccount(self.handle, $0) }
     }
     /**
-     * Initializes a new `SafeSmartAccount` instance with the given EOA signing key.
+     * Initializes a new `SafeSmartAccount` instance, deriving the EOA address
+     * from the private key obtained through the foreign-side key manager.
+     *
+     * The key is read exactly once at construction so the [`SiegelSession`]
+     * can be zeroized immediately. Subsequent signing calls request a fresh
+     * session from the key manager.
      *
      * # Arguments
-     * - `private_key`: A hex-encoded string representing the **secret key** of the EOA who is an owner in the Safe.
+     * - `key_manager`: Foreign-side [`SmartAccountKeyManager`] that delivers the EOA private key in a one-shot
+     * siegel-protected session.
      * - `wallet_address`: The address of the Safe Smart Account (i.e. the deployed smart contract). This is required because
      * some legacy versions of the wallet were computed differently. Today, it cannot be deterministically computed for all
      * users. This is also necessary to support signing for Safes deployed by third-party Mini App devs, where the
      * wallet address is only known at runtime.
      *
      * # Errors
+     * - Will return an error if the wallet address is not a valid hex-encoded address.
      * - Will return an error if the key is not a validly encoded hex string.
-     * - Will return an error if the key is not a valid point in the k256 curve.
+     * - Will return an error if the decoded key is not a valid k256 scalar (zero or out of range).
+     * - Will return an error if the siegel session cannot be read.
      */
-public convenience init(privateKey: String, walletAddress: String)throws  {
+public convenience init(keyManager: SmartAccountKeyManager, walletAddress: String)throws  {
     let handle =
         try rustCallWithError(FfiConverterTypeSafeSmartAccountError_lift) {
     uniffi_bedrock_fn_constructor_safesmartaccount_new(
-        FfiConverterString.lower(privateKey),
+        FfiConverterTypeSmartAccountKeyManager_lower(keyManager),
         FfiConverterString.lower(walletAddress),$0
     )
 }
@@ -6138,40 +6154,45 @@ open func personalSign(chainId: UInt32, message: String)throws  -> HexEncodedDat
      * - Will throw an error if the signature process unexpectedly fails.
      *
      * # Examples
-     * ```rust
-     * use bedrock::smart_account::{SafeSmartAccount};
+     * ```no_run
+     * use std::sync::Arc;
+     * use bedrock::smart_account::{
+     * SafeSmartAccount, SafeSmartAccountError, SmartAccountKeyManager,
+     * };
      * use bedrock::transactions::foreign::UnparsedUserOperation;
      * use bedrock::primitives::Network;
      *
+     * fn sign(
+     * key_manager: Arc<dyn SmartAccountKeyManager>,
+     * ) -> Result<(), SafeSmartAccountError> {
      * let safe = SafeSmartAccount::new(
-     * // this is Anvil's default private key, it is a test secret
-     * "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".to_string(),
+     * key_manager,
      * "0x4564420674EA68fcc61b463C0494807C759d47e6",
-     * )
-     * .unwrap();
+     * )?;
      *
-     * // This would normally be crafted by the user, or requested by Mini Apps.
+     * // Crafted by the user, or requested by Mini Apps.
      * let user_op = UnparsedUserOperation {
-     * sender:"0xf1390a26bd60d83a4e38c7be7be1003c616296ad".to_string(),
-     * nonce: "0xb14292cd79fae7d79284d4e6304fb58e21d579c13a75eed80000000000000000".to_string(),
-     * call_data:  "0x7bb3742800000000000000000000000079a02482a880bce3f13e09da970dc34db4cd24d10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000044a9059cbb000000000000000000000000ce2111f9ab8909b71ebadc9b6458daefe069eda4000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000".to_string(),
-     * signature:  "0x000012cea6000000967a7600ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
-     * call_gas_limit: "0xabb8".to_string(),
-     * verification_gas_limit: "0xfa07".to_string(),
-     * pre_verification_gas: "0x8e4d78".to_string(),
-     * max_fee_per_gas: "0x1af6f".to_string(),
-     * max_priority_fee_per_gas: "0x1adb0".to_string(),
-     * paymaster: Some("0xEF725Aa22d43Ea69FB22bE2EBe6ECa205a6BCf5B".to_string()),
-     * paymaster_verification_gas_limit: Some("0x7415".to_string()),
-     * paymaster_post_op_gas_limit: Some("0x".to_string()),
-     * paymaster_data: Some("000000000000000067789a97c4af0f8ae7acc9237c8f9611a0eb4662009d366b8defdf5f68fed25d22ca77be64b8eef49d917c3f8642ca539571594a84be9d0ee717c099160b79a845bea2111b".to_string()),
+     * sender: "0xf1390a26bd60d83a4e38c7be7be1003c616296ad".to_string(),
+     * nonce: "0x0".to_string(),
+     * call_data: "0x".to_string(),
+     * signature: "0x".to_string(),
+     * call_gas_limit: "0x0".to_string(),
+     * verification_gas_limit: "0x0".to_string(),
+     * pre_verification_gas: "0x0".to_string(),
+     * max_fee_per_gas: "0x0".to_string(),
+     * max_priority_fee_per_gas: "0x0".to_string(),
+     * paymaster: None,
+     * paymaster_verification_gas_limit: None,
+     * paymaster_post_op_gas_limit: None,
+     * paymaster_data: None,
      * factory: None,
      * factory_data: None,
      * };
      *
-     * let signature = safe.sign_4337_op(Network::WorldChain as u32, user_op).unwrap();
-     *
+     * let signature = safe.sign_4337_op(Network::WorldChain as u32, user_op)?;
      * println!("Signature: {}", signature.to_hex_string());
+     * Ok(())
+     * }
      * ```
      */
 open func sign4337Op(chainId: UInt32, userOperation: UnparsedUserOperation)throws  -> HexEncodedData  {
@@ -6407,14 +6428,17 @@ open func transactionPermit2Approve(tokenAddress: String, spenderAddress: String
      *
      * # Example
      *
-     * ```rust,no_run
-     * use bedrock::smart_account::SafeSmartAccount;
+     * ```no_run
+     * use std::sync::Arc;
+     * use bedrock::smart_account::{SafeSmartAccount, SmartAccountKeyManager};
      * use bedrock::transactions::TransactionError;
      * use bedrock::primitives::Network;
      *
-     * # async fn example() -> Result<(), TransactionError> {
+     * # async fn example(
+     * #     key_manager: Arc<dyn SmartAccountKeyManager>,
+     * # ) -> Result<(), TransactionError> {
      * // Assume we have a configured SafeSmartAccount
-     * # let safe_account = SafeSmartAccount::new("test_key".to_string(), "0x1234567890123456789012345678901234567890").unwrap();
+     * # let safe_account = SafeSmartAccount::new(key_manager, "0x1234567890123456789012345678901234567890").unwrap();
      *
      * // Transfer USDC on World Chain
      * let tx_hash = safe_account.transaction_transfer(
@@ -6988,6 +7012,240 @@ public func FfiConverterTypeSiweMessage_lift(_ handle: UInt64) throws -> SiweMes
 #endif
 public func FfiConverterTypeSiweMessage_lower(_ value: SiweMessage) -> UInt64 {
     return FfiConverterTypeSiweMessage.lower(value)
+}
+
+
+
+
+
+
+/**
+ * Foreign-side key store that delivers the EOA private key wrapped in a
+ * fresh [`SiegelSession`] each time it is needed.
+ *
+ * Implementations live on the Swift/Kotlin side: they fetch the secret from
+ * the platform's secure storage (e.g. iOS Keychain), allocate a fresh
+ * `SiegelSession` and fill it via `siegel_fill`. Rust consumes the session
+ * with a single `read_once` call which zeroizes the protected buffer.
+ *
+ * # Foreign contract
+ *
+ * - **Session length**: 64 bytes — the EOA private key as ASCII hex (the
+ * secp256k1 scalar is 32 raw bytes, encoded as 64 hex characters).
+ * - **Byte format**: ASCII hex (lowercase or uppercase, no `0x` prefix).
+ * - **Lifetime**: each call returns a brand-new session. The previous one is
+ * consumed and zeroized as soon as Rust finishes signing.
+ * - **Call frequency**: invoked once per signing operation (and once at
+ * construction to validate the key and cache the EOA address). A typical
+ * user flow may trigger several invocations.
+ */
+public protocol SmartAccountKeyManager: AnyObject, Sendable {
+    
+    /**
+     * Returns a freshly allocated and filled [`SiegelSession`] containing
+     * the hex-encoded EOA private key. See the [trait docs](Self) for the
+     * expected length, encoding and call semantics.
+     */
+    func getEoaPrivateKey()  -> SiegelSession
+    
+}
+/**
+ * Foreign-side key store that delivers the EOA private key wrapped in a
+ * fresh [`SiegelSession`] each time it is needed.
+ *
+ * Implementations live on the Swift/Kotlin side: they fetch the secret from
+ * the platform's secure storage (e.g. iOS Keychain), allocate a fresh
+ * `SiegelSession` and fill it via `siegel_fill`. Rust consumes the session
+ * with a single `read_once` call which zeroizes the protected buffer.
+ *
+ * # Foreign contract
+ *
+ * - **Session length**: 64 bytes — the EOA private key as ASCII hex (the
+ * secp256k1 scalar is 32 raw bytes, encoded as 64 hex characters).
+ * - **Byte format**: ASCII hex (lowercase or uppercase, no `0x` prefix).
+ * - **Lifetime**: each call returns a brand-new session. The previous one is
+ * consumed and zeroized as soon as Rust finishes signing.
+ * - **Call frequency**: invoked once per signing operation (and once at
+ * construction to validate the key and cache the EOA address). A typical
+ * user flow may trigger several invocations.
+ */
+open class SmartAccountKeyManagerImpl: SmartAccountKeyManager, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_smartaccountkeymanager(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_bedrock_fn_free_smartaccountkeymanager(handle, $0) }
+    }
+
+    
+
+    
+    /**
+     * Returns a freshly allocated and filled [`SiegelSession`] containing
+     * the hex-encoded EOA private key. See the [trait docs](Self) for the
+     * expected length, encoding and call semantics.
+     */
+open func getEoaPrivateKey() -> SiegelSession  {
+    return try!  FfiConverterTypeSiegelSession_lift(try! rustCall() {
+    uniffi_bedrock_fn_method_smartaccountkeymanager_get_eoa_private_key(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+
+    
+}
+
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceSmartAccountKeyManager {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    //
+    // This creates 1-element array, since this seems to be the only way to construct a const
+    // pointer that we can pass to the Rust code.
+    static let vtable: [UniffiVTableCallbackInterfaceSmartAccountKeyManager] = [UniffiVTableCallbackInterfaceSmartAccountKeyManager(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterTypeSmartAccountKeyManager.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface SmartAccountKeyManager: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterTypeSmartAccountKeyManager.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface SmartAccountKeyManager: handle missing in uniffiClone")
+            }
+        },
+        getEoaPrivateKey: { (
+            uniffiHandle: UInt64,
+            uniffiOutReturn: UnsafeMutablePointer<UInt64>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> SiegelSession in
+                guard let uniffiObj = try? FfiConverterTypeSmartAccountKeyManager.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.getEoaPrivateKey(
+                )
+            }
+
+            
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterTypeSiegelSession_lower($0) }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        }
+    )]
+}
+
+private func uniffiCallbackInitSmartAccountKeyManager() {
+    uniffi_bedrock_fn_init_callback_vtable_smartaccountkeymanager(UniffiCallbackInterfaceSmartAccountKeyManager.vtable)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSmartAccountKeyManager: FfiConverter {
+    fileprivate static let handleMap = UniffiHandleMap<SmartAccountKeyManager>()
+
+    typealias FfiType = UInt64
+    typealias SwiftType = SmartAccountKeyManager
+
+    public static func lift(_ handle: UInt64) throws -> SmartAccountKeyManager {
+        if ((handle & 1) == 0) {
+            // Rust-generated handle, construct a new class that uses the handle to implement the
+            // interface
+            return SmartAccountKeyManagerImpl(unsafeFromHandle: handle)
+        } else {
+            // Swift-generated handle, get the object from the handle map
+            return try handleMap.remove(handle: handle)
+        }
+    }
+
+    public static func lower(_ value: SmartAccountKeyManager) -> UInt64 {
+         if let rustImpl = value as? SmartAccountKeyManagerImpl {
+             // Rust-implemented object.  Clone the handle and return it
+            return rustImpl.uniffiCloneHandle()
+         } else {
+            // Swift object, generate a new vtable handle and return that.
+            return handleMap.insert(obj: value)
+         }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SmartAccountKeyManager {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: SmartAccountKeyManager, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSmartAccountKeyManager_lift(_ handle: UInt64) throws -> SmartAccountKeyManager {
+    return try FfiConverterTypeSmartAccountKeyManager.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSmartAccountKeyManager_lower(_ value: SmartAccountKeyManager) -> UInt64 {
+    return FfiConverterTypeSmartAccountKeyManager.lower(value)
 }
 
 
@@ -12989,6 +13247,20 @@ public enum SafeSmartAccountError: Swift.Error, Equatable, Hashable, Foundation.
     case RestrictedContract(String
     )
     /**
+     * Error originating from the siegel secure-memory session backing the EOA key.
+     *
+     * `kind` is a stable machine-readable discriminant (e.g. `"consumed"`,
+     * `"invalid_state"`); `message` is the human-readable description.
+     */
+    case SiegelSession(
+        /**
+         * Stable machine-readable discriminant for the underlying [`SessionError`] variant.
+         */kind: String, 
+        /**
+         * Full description of the session error.
+         */errorMessage: String
+    )
+    /**
      * A provided raw input could not be parsed, is incorrectly formatted, incorrectly encoded or otherwise invalid.
      */
     case InvalidInput(
@@ -13061,17 +13333,21 @@ public struct FfiConverterTypeSafeSmartAccountError: FfiConverterRustBuffer {
         case 5: return .RestrictedContract(
             try FfiConverterString.read(from: &buf)
             )
-        case 6: return .InvalidInput(
+        case 6: return .SiegelSession(
+            kind: try FfiConverterString.read(from: &buf), 
+            errorMessage: try FfiConverterString.read(from: &buf)
+            )
+        case 7: return .InvalidInput(
             attribute: try FfiConverterString.read(from: &buf), 
             errorMessage: try FfiConverterString.read(from: &buf)
             )
-        case 7: return .PrimitiveError(
+        case 8: return .PrimitiveError(
             try FfiConverterString.read(from: &buf)
             )
-        case 8: return .Generic(
+        case 9: return .Generic(
             errorMessage: try FfiConverterString.read(from: &buf)
             )
-        case 9: return .FileSystem(
+        case 10: return .FileSystem(
             try FfiConverterTypeFileSystemError.read(from: &buf)
             )
 
@@ -13111,24 +13387,30 @@ public struct FfiConverterTypeSafeSmartAccountError: FfiConverterRustBuffer {
             FfiConverterString.write(v1, into: &buf)
             
         
-        case let .InvalidInput(attribute,errorMessage):
+        case let .SiegelSession(kind,errorMessage):
             writeInt(&buf, Int32(6))
+            FfiConverterString.write(kind, into: &buf)
+            FfiConverterString.write(errorMessage, into: &buf)
+            
+        
+        case let .InvalidInput(attribute,errorMessage):
+            writeInt(&buf, Int32(7))
             FfiConverterString.write(attribute, into: &buf)
             FfiConverterString.write(errorMessage, into: &buf)
             
         
         case let .PrimitiveError(v1):
-            writeInt(&buf, Int32(7))
+            writeInt(&buf, Int32(8))
             FfiConverterString.write(v1, into: &buf)
             
         
         case let .Generic(errorMessage):
-            writeInt(&buf, Int32(8))
+            writeInt(&buf, Int32(9))
             FfiConverterString.write(errorMessage, into: &buf)
             
         
         case let .FileSystem(v1):
-            writeInt(&buf, Int32(9))
+            writeInt(&buf, Int32(10))
             FfiConverterTypeFileSystemError.write(v1, into: &buf)
             
         }
@@ -14876,7 +15158,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_safesmartaccount_personal_sign() != 44448) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_sign_4337_op() != 60756) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_sign_4337_op() != 51056) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_sign_permit2_transfer() != 36460) {
@@ -14903,7 +15185,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_permit2_approve() != 65419) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_transfer() != 4941) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_transfer() != 12529) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_usd_legacy_vault_migrate() != 17686) {
@@ -14925,6 +15207,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_send_bundler_sponsored_user_operation() != 62094) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_smartaccountkeymanager_get_eoa_private_key() != 36336) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_eip191signer_sign_eip_191() != 29470) {
@@ -14984,7 +15269,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_constructor_siwemessage_from_world_app_auth_request() != 38309) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_safesmartaccount_new() != 35976) {
+    if (uniffi_bedrock_checksum_constructor_safesmartaccount_new() != 56875) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_eoasigner_new() != 47975) {
@@ -14998,6 +15283,8 @@ private let initializationResult: InitializationResult = {
     uniffiCallbackInitLogger()
     uniffiCallbackInitMigrationProcessor()
     uniffiCallbackInitNtp()
+    uniffiCallbackInitSmartAccountKeyManager()
+    uniffiEnsureSiegelUniffiInitialized()
     return InitializationResult.ok
 }()
 
