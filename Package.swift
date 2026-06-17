@@ -21,9 +21,9 @@ let package = Package(
         ),
         .binaryTarget(
             name: "BedrockFFI",
-            url: "https://api.github.com/repos/worldcoin/bedrock-swift/releases/assets/449721498.zip",
-            checksum: "0743468e5bcb8228b3997c160ead0d58b175bb8f9f2701e4e10e229fa52b9e2e"
+            url: "https://api.github.com/repos/worldcoin/bedrock-swift/releases/assets/450580295.zip",
+            checksum: "1ad512d21faa96b47c1cf40df1bc613d819c604639b290689bc4b5630d7a7ed4"
         )
     ]
 )
-// Release version: 0.4.0
+// Release version: 0.4.1
