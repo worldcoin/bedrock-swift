@@ -11,7 +11,7 @@ let package = Package(
     products: [
         .library(
             name: "Bedrock",
-            targets: ["Bedrock"])
+            targets: ["Bedrock"]),
     ],
     targets: [
         .target(
@@ -21,9 +21,9 @@ let package = Package(
         ),
         .binaryTarget(
             name: "BedrockFFI",
-            url: "https://api.github.com/repos/worldcoin/bedrock-swift/releases/assets/450580295.zip",
-            checksum: "1ad512d21faa96b47c1cf40df1bc613d819c604639b290689bc4b5630d7a7ed4"
+            url: "https://api.github.com/repos/worldcoin/bedrock-swift/releases/assets/485380525.zip",
+            checksum: "131075bc277927a92d224e23e5674e7c46f6a1929d091450969c2fa392ec10e5"
         )
     ]
 )
-// Release version: 0.4.1
+// Release version: 0.5.0

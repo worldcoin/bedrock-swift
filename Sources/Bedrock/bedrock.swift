@@ -956,8 +956,6 @@ public protocol BackupManagerProtocol: AnyObject, Sendable {
      * * `factor_secret` - is the factor secret that was used to encrypt the backup keypair. Hex encoded.
      * * `factor_type` - is the type of factor that was used to encrypt the backup keypair.
      * It should mark what kind of key `factor_secret` is.
-     * * `current_manifest_hash` - hex-encoded 32-byte blake3 hash of the manifest head at the time
-     * the fetched backup was created (returned by the remote and provided by the native layer).
      *
      * # Errors
      * * `BackupError::DecodeFactorSecretError` - if the factor secret is invalid, e.g. not hex encoded.
@@ -974,7 +972,18 @@ public protocol BackupManagerProtocol: AnyObject, Sendable {
      * # Errors
      * Propagates decoding/decryption errors when inputs are malformed or do not match.
      */
-    func decryptAndUnpackSealedBackup(sealedBackupData: Data, encryptedBackupKeypair: String, factorSecret: String, factorType: FactorType, currentManifestHash: String) throws  -> DecryptedBackup
+    func decryptAndUnpackSealedBackup(sealedBackupData: Data, encryptedBackupKeypair: String, factorSecret: String, factorType: FactorType) throws  -> DecryptedBackup
+    
+    /**
+     * Returns the backup account public key and fully qualified id.
+     *
+     * # Errors
+     * * `BackupError::InvalidRootSecretError` - if the session is not valid UTF-8 or the
+     * root secret cannot be parsed.
+     * * `BackupError::Generic` - if the Siegel session cannot be read or key derivation
+     * fails.
+     */
+    func getBackupAccount(rootSecret: SiegelSession) throws  -> BackupAccount
     
     /**
      * Checks if the local backup is stale compared to the provided remote manifest hash.
@@ -1214,8 +1223,6 @@ open func debugGetLocalManifest()throws  -> ManifestDebug  {
      * * `factor_secret` - is the factor secret that was used to encrypt the backup keypair. Hex encoded.
      * * `factor_type` - is the type of factor that was used to encrypt the backup keypair.
      * It should mark what kind of key `factor_secret` is.
-     * * `current_manifest_hash` - hex-encoded 32-byte blake3 hash of the manifest head at the time
-     * the fetched backup was created (returned by the remote and provided by the native layer).
      *
      * # Errors
      * * `BackupError::DecodeFactorSecretError` - if the factor secret is invalid, e.g. not hex encoded.
@@ -1232,15 +1239,32 @@ open func debugGetLocalManifest()throws  -> ManifestDebug  {
      * # Errors
      * Propagates decoding/decryption errors when inputs are malformed or do not match.
      */
-open func decryptAndUnpackSealedBackup(sealedBackupData: Data, encryptedBackupKeypair: String, factorSecret: String, factorType: FactorType, currentManifestHash: String)throws  -> DecryptedBackup  {
+open func decryptAndUnpackSealedBackup(sealedBackupData: Data, encryptedBackupKeypair: String, factorSecret: String, factorType: FactorType)throws  -> DecryptedBackup  {
     return try  FfiConverterTypeDecryptedBackup_lift(try rustCallWithError(FfiConverterTypeBackupError_lift) {
     uniffi_bedrock_fn_method_backupmanager_decrypt_and_unpack_sealed_backup(
             self.uniffiCloneHandle(),
         FfiConverterData.lower(sealedBackupData),
         FfiConverterString.lower(encryptedBackupKeypair),
         FfiConverterString.lower(factorSecret),
-        FfiConverterTypeFactorType_lower(factorType),
-        FfiConverterString.lower(currentManifestHash),$0
+        FfiConverterTypeFactorType_lower(factorType),$0
+    )
+})
+}
+    
+    /**
+     * Returns the backup account public key and fully qualified id.
+     *
+     * # Errors
+     * * `BackupError::InvalidRootSecretError` - if the session is not valid UTF-8 or the
+     * root secret cannot be parsed.
+     * * `BackupError::Generic` - if the Siegel session cannot be read or key derivation
+     * fails.
+     */
+open func getBackupAccount(rootSecret: SiegelSession)throws  -> BackupAccount  {
+    return try  FfiConverterTypeBackupAccount_lift(try rustCallWithError(FfiConverterTypeBackupError_lift) {
+    uniffi_bedrock_fn_method_backupmanager_get_backup_account(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeSiegelSession_lower(rootSecret),$0
     )
 })
 }
@@ -5470,22 +5494,6 @@ public func FfiConverterTypeNtp_lower(_ value: Ntp) -> UInt64 {
 public protocol RootKeyProtocol: AnyObject, Sendable {
     
     /**
-     * Key derivation. "Public" value.
-     *
-     * Derives the deterministic public backup account ID to uniquely identify a backup for an account.
-     *
-     * This is used to ensure that only a single backup can exist per account, otherwise this could lead
-     * to race conditions and undefined behavior with the backup (including user confusion).
-     *
-     * The public backup account ID is the public key of a `secp256k1` key. Public key cryptography is introduced
-     * so the user can prove ownership of the backup account ID for certain disaster recovery scenarios.
-     *
-     * # Errors
-     * No errors are generally expected, but key derivation may unexpectedly fail.
-     */
-    func derivePublicBackupAccountId() throws  -> String
-    
-    /**
      * Returns `true` if the provided `RootKey`s are equal by comparing internally the underlying secrets.
      */
     func isEqualTo(other: RootKey)  -> Bool
@@ -5564,6 +5572,17 @@ public static func fromJson(jsonStr: String)throws  -> RootKey  {
 }
     
     /**
+     * Initialize an existing `RootKey` from JSON bytes
+     */
+public static func fromSlice(jsonBytes: Data)throws  -> RootKey  {
+    return try  FfiConverterTypeRootKey_lift(try rustCallWithError(FfiConverterTypeRootKeyError_lift) {
+    uniffi_bedrock_fn_constructor_rootkey_from_slice(
+        FfiConverterData.lower(jsonBytes),$0
+    )
+})
+}
+    
+    /**
      * Generates a new random `RootKey` using the system CSPRNG.
      *
      * # Panics
@@ -5577,28 +5596,6 @@ public static func newRandom() -> RootKey  {
 }
     
 
-    
-    /**
-     * Key derivation. "Public" value.
-     *
-     * Derives the deterministic public backup account ID to uniquely identify a backup for an account.
-     *
-     * This is used to ensure that only a single backup can exist per account, otherwise this could lead
-     * to race conditions and undefined behavior with the backup (including user confusion).
-     *
-     * The public backup account ID is the public key of a `secp256k1` key. Public key cryptography is introduced
-     * so the user can prove ownership of the backup account ID for certain disaster recovery scenarios.
-     *
-     * # Errors
-     * No errors are generally expected, but key derivation may unexpectedly fail.
-     */
-open func derivePublicBackupAccountId()throws  -> String  {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeRootKeyError_lift) {
-    uniffi_bedrock_fn_method_rootkey_derive_public_backup_account_id(
-            self.uniffiCloneHandle(),$0
-    )
-})
-}
     
     /**
      * Returns `true` if the provided `RootKey`s are equal by comparing internally the underlying secrets.
@@ -7650,6 +7647,23 @@ public protocol TurnkeyProtocol: AnyObject, Sendable {
      */
     func stamp(body: String, apiPrivateKey: String) throws  -> String
     
+    /**
+     * Stamps a JSON activity with the backup account key. See [`Self::stamp`] for
+     * more details on stamping.
+     *
+     * This should only be used for disaster recovery (`/reset`) to clear the Turnkey
+     * account that will go out of use.
+     *
+     * # Errors
+     * * `TurnkeyError::InvalidRootSecretError` - if the session is not valid UTF-8 or the
+     * root secret cannot be parsed.
+     * * `TurnkeyError::DecodeBodyError` - if `body` is not valid JSON.
+     * * `TurnkeyError::SigningError` - if signing fails.
+     * * `TurnkeyError::Generic` - if the Siegel session cannot be read, key derivation
+     * fails, or the stamp cannot be serialized.
+     */
+    func stampWithBackupAccountKey(rootSecret: SiegelSession, body: String) throws  -> String
+    
 }
 /**
  * Allows interactions with Turnkey API.
@@ -7839,6 +7853,31 @@ open func stamp(body: String, apiPrivateKey: String)throws  -> String  {
             self.uniffiCloneHandle(),
         FfiConverterString.lower(body),
         FfiConverterString.lower(apiPrivateKey),$0
+    )
+})
+}
+    
+    /**
+     * Stamps a JSON activity with the backup account key. See [`Self::stamp`] for
+     * more details on stamping.
+     *
+     * This should only be used for disaster recovery (`/reset`) to clear the Turnkey
+     * account that will go out of use.
+     *
+     * # Errors
+     * * `TurnkeyError::InvalidRootSecretError` - if the session is not valid UTF-8 or the
+     * root secret cannot be parsed.
+     * * `TurnkeyError::DecodeBodyError` - if `body` is not valid JSON.
+     * * `TurnkeyError::SigningError` - if signing fails.
+     * * `TurnkeyError::Generic` - if the Siegel session cannot be read, key derivation
+     * fails, or the stamp cannot be serialized.
+     */
+open func stampWithBackupAccountKey(rootSecret: SiegelSession, body: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeTurnkeyError_lift) {
+    uniffi_bedrock_fn_method_turnkey_stamp_with_backup_account_key(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeSiegelSession_lower(rootSecret),
+        FfiConverterString.lower(body),$0
     )
 })
 }
@@ -8283,6 +8322,81 @@ public func FfiConverterTypeAddNewFactorResult_lift(_ buf: RustBuffer) throws ->
 #endif
 public func FfiConverterTypeAddNewFactorResult_lower(_ value: AddNewFactorResult) -> RustBuffer {
     return FfiConverterTypeAddNewFactorResult.lower(value)
+}
+
+
+/**
+ * A representation of the Backup Account and its id.
+ */
+public struct BackupAccount: Equatable, Hashable {
+    /**
+     * The full identifier of the backup account. This is the identifier used with
+     * the remote backup-service.
+     */
+    public var id: String
+    /**
+     * The underlying public key of the backup account. Hex-encoded SEC.1 compressed point.
+     *
+     * This public key can be used to authenticate with a specific backup.
+     */
+    public var publicKey: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The full identifier of the backup account. This is the identifier used with
+         * the remote backup-service.
+         */id: String, 
+        /**
+         * The underlying public key of the backup account. Hex-encoded SEC.1 compressed point.
+         *
+         * This public key can be used to authenticate with a specific backup.
+         */publicKey: String) {
+        self.id = id
+        self.publicKey = publicKey
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension BackupAccount: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBackupAccount: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BackupAccount {
+        return
+            try BackupAccount(
+                id: FfiConverterString.read(from: &buf), 
+                publicKey: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BackupAccount, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.publicKey, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupAccount_lift(_ buf: RustBuffer) throws -> BackupAccount {
+    return try FfiConverterTypeBackupAccount.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupAccount_lower(_ value: BackupAccount) -> RustBuffer {
+    return FfiConverterTypeBackupAccount.lower(value)
 }
 
 
@@ -10790,6 +10904,16 @@ public enum BedrockEnvironment: Equatable, Hashable {
      */
     case staging
     /**
+     * The sandbox environment is an externally available and reliable environment,
+     * and with a set of tools that allows breaking boxes and testing anything.
+     *
+     * The sandbox environment is available for TFH Apps (World App, World ID), and uses
+     * the `staging` environment of the World ID Protocol.
+     *
+     * Reference: <http://go/sandbox>
+     */
+    case sandbox
+    /**
      * Production environment
      */
     case production
@@ -10816,7 +10940,9 @@ public struct FfiConverterTypeBedrockEnvironment: FfiConverterRustBuffer {
         
         case 1: return .staging
         
-        case 2: return .production
+        case 2: return .sandbox
+        
+        case 3: return .production
         
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -10830,8 +10956,12 @@ public struct FfiConverterTypeBedrockEnvironment: FfiConverterRustBuffer {
             writeInt(&buf, Int32(1))
         
         
-        case .production:
+        case .sandbox:
             writeInt(&buf, Int32(2))
+        
+        
+        case .production:
+            writeInt(&buf, Int32(3))
         
         }
     }
@@ -13803,6 +13933,19 @@ public enum TurnkeyError: Swift.Error, Equatable, Hashable, Foundation.Localized
     case ConvertP256KeypairToHpkeKeypairError
     case ConvertEnclavePublicKeyToVerifyingKeyError
     /**
+     * Errors propagated from a Siegel session
+     */
+    case SiegelSession(String
+    )
+    /**
+     * Root secret is invalid.
+     */
+    case InvalidRootSecretError
+    /**
+     * Unexpected error signing Turnkey activity
+     */
+    case SigningError
+    /**
      * A generic error that can wrap any anyhow error.
      */
     case Generic(
@@ -13856,10 +13999,15 @@ public struct FfiConverterTypeTurnkeyError: FfiConverterRustBuffer {
         case 10: return .DecryptFactorSecretError
         case 11: return .ConvertP256KeypairToHpkeKeypairError
         case 12: return .ConvertEnclavePublicKeyToVerifyingKeyError
-        case 13: return .Generic(
+        case 13: return .SiegelSession(
+            try FfiConverterString.read(from: &buf)
+            )
+        case 14: return .InvalidRootSecretError
+        case 15: return .SigningError
+        case 16: return .Generic(
             errorMessage: try FfiConverterString.read(from: &buf)
             )
-        case 14: return .FileSystem(
+        case 17: return .FileSystem(
             try FfiConverterTypeFileSystemError.read(from: &buf)
             )
 
@@ -13922,13 +14070,26 @@ public struct FfiConverterTypeTurnkeyError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(12))
         
         
-        case let .Generic(errorMessage):
+        case let .SiegelSession(v1):
             writeInt(&buf, Int32(13))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case .InvalidRootSecretError:
+            writeInt(&buf, Int32(14))
+        
+        
+        case .SigningError:
+            writeInt(&buf, Int32(15))
+        
+        
+        case let .Generic(errorMessage):
+            writeInt(&buf, Int32(16))
             FfiConverterString.write(errorMessage, into: &buf)
             
         
         case let .FileSystem(v1):
-            writeInt(&buf, Int32(14))
+            writeInt(&buf, Int32(17))
             FfiConverterTypeFileSystemError.write(v1, into: &buf)
             
         }
@@ -14945,7 +15106,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_backupmanager_debug_get_local_manifest() != 27881) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_backupmanager_decrypt_and_unpack_sealed_backup() != 18389) {
+    if (uniffi_bedrock_checksum_method_backupmanager_decrypt_and_unpack_sealed_backup() != 25866) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_backupmanager_get_backup_account() != 43349) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_backupmanager_is_local_backup_stale() != 23084) {
@@ -14991,6 +15155,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_turnkey_stamp() != 28531) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_turnkey_stamp_with_backup_account_key() != 34668) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_migrationcontroller_delete_all_records() != 44884) {
@@ -15128,9 +15295,6 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_useragentbuilder_with_segment() != 48407) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_rootkey_derive_public_backup_account_id() != 33225) {
-        return InitializationResult.apiChecksumMismatch
-    }
     if (uniffi_bedrock_checksum_method_rootkey_is_equal_to() != 28056) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -15258,6 +15422,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_rootkey_from_json() != 31365) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_constructor_rootkey_from_slice() != 24099) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_rootkey_new_random() != 47400) {
