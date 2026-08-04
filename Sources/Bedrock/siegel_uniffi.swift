@@ -544,6 +544,11 @@ public protocol SiegelSessionProtocol: AnyObject, Sendable {
     func isConsumed()  -> Bool
     
     /**
+     * Whether the secret's pages are locked in RAM (`mlock`ed).
+     */
+    func isLocked()  -> Bool
+    
+    /**
      * Capacity of the session in bytes.
      *
      * Stable for the lifetime of the session. Callers can use this to
@@ -671,6 +676,17 @@ open func isConsumed() -> Bool  {
 }
     
     /**
+     * Whether the secret's pages are locked in RAM (`mlock`ed).
+     */
+open func isLocked() -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_siegel_uniffi_fn_method_siegelsession_is_locked(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+    /**
      * Capacity of the session in bytes.
      *
      * Stable for the lifetime of the session. Callers can use this to
@@ -764,8 +780,6 @@ public enum SessionError: Swift.Error, Equatable, Hashable, Foundation.Localized
     
     case ProtectionFailed(message: String)
     
-    case LockFailed(message: String)
-    
     case CanaryCorrupted(message: String)
     
     case HandleAllocationFailed(message: String)
@@ -827,15 +841,11 @@ public struct FfiConverterTypeSessionError: FfiConverterRustBuffer {
             message: try FfiConverterString.read(from: &buf)
         )
         
-        case 8: return .LockFailed(
+        case 8: return .CanaryCorrupted(
             message: try FfiConverterString.read(from: &buf)
         )
         
-        case 9: return .CanaryCorrupted(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 10: return .HandleAllocationFailed(
+        case 9: return .HandleAllocationFailed(
             message: try FfiConverterString.read(from: &buf)
         )
         
@@ -864,12 +874,10 @@ public struct FfiConverterTypeSessionError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(6))
         case .ProtectionFailed(_ /* message is ignored*/):
             writeInt(&buf, Int32(7))
-        case .LockFailed(_ /* message is ignored*/):
-            writeInt(&buf, Int32(8))
         case .CanaryCorrupted(_ /* message is ignored*/):
-            writeInt(&buf, Int32(9))
+            writeInt(&buf, Int32(8))
         case .HandleAllocationFailed(_ /* message is ignored*/):
-            writeInt(&buf, Int32(10))
+            writeInt(&buf, Int32(9))
 
         
         }
@@ -910,6 +918,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_siegel_uniffi_checksum_method_siegelsession_is_consumed() != 40494) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_siegel_uniffi_checksum_method_siegelsession_is_locked() != 32851) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_siegel_uniffi_checksum_method_siegelsession_len() != 25084) {

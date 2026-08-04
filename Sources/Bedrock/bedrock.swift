@@ -4007,6 +4007,285 @@ public func FfiConverterTypeHttpClientTester_lower(_ value: HttpClientTester) ->
 
 
 /**
+ * A foreign-implemented signer backed by an elliptic-curve keypair.
+ *
+ * The key stays in the host's secure storage (ideally a hardware-backed secure
+ * enclave) and never crosses the FFI boundary: Bedrock hands the signer a digest
+ * and receives a signature plus the public key.
+ *
+ * This is a **curve-agnostic** signing primitive.
+ *
+ * # Contract
+ * Implementations MUST:
+ * - [`Self::public_key`]: return the compressed public key as a **SEC1-encoded point**
+ * (compressed `0x02`/`0x03`).
+ * - [`Self::sign_digest`]: sign the provided pre-computed digest **directly** (no
+ * additional hashing) with ECDSA over the key's curve, returning a
+ * **DER-encoded, low-S-normalized** signature. Synchronous.
+ */
+public protocol KeypairSigner: AnyObject, Sendable {
+    
+    /**
+     * Returns the public key as a SEC1-encoded point.
+     *
+     * # Errors
+     * Returns [`KeypairSignerError`] if the key material is unavailable or invalid.
+     */
+    func publicKey() throws  -> Data
+    
+    /**
+     * Signs a pre-computed digest with the private key. Signature MUST be normalized (low S).
+     *
+     * # Errors
+     * Returns [`KeypairSignerError`] if signing is rejected or the key is unavailable.
+     */
+    func signDigest(digest: Data) throws  -> Data
+    
+}
+/**
+ * A foreign-implemented signer backed by an elliptic-curve keypair.
+ *
+ * The key stays in the host's secure storage (ideally a hardware-backed secure
+ * enclave) and never crosses the FFI boundary: Bedrock hands the signer a digest
+ * and receives a signature plus the public key.
+ *
+ * This is a **curve-agnostic** signing primitive.
+ *
+ * # Contract
+ * Implementations MUST:
+ * - [`Self::public_key`]: return the compressed public key as a **SEC1-encoded point**
+ * (compressed `0x02`/`0x03`).
+ * - [`Self::sign_digest`]: sign the provided pre-computed digest **directly** (no
+ * additional hashing) with ECDSA over the key's curve, returning a
+ * **DER-encoded, low-S-normalized** signature. Synchronous.
+ */
+open class KeypairSignerImpl: KeypairSigner, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_keypairsigner(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_bedrock_fn_free_keypairsigner(handle, $0) }
+    }
+
+    
+
+    
+    /**
+     * Returns the public key as a SEC1-encoded point.
+     *
+     * # Errors
+     * Returns [`KeypairSignerError`] if the key material is unavailable or invalid.
+     */
+open func publicKey()throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeKeypairSignerError_lift) {
+    uniffi_bedrock_fn_method_keypairsigner_public_key(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+    /**
+     * Signs a pre-computed digest with the private key. Signature MUST be normalized (low S).
+     *
+     * # Errors
+     * Returns [`KeypairSignerError`] if signing is rejected or the key is unavailable.
+     */
+open func signDigest(digest: Data)throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeKeypairSignerError_lift) {
+    uniffi_bedrock_fn_method_keypairsigner_sign_digest(
+            self.uniffiCloneHandle(),
+        FfiConverterData.lower(digest),$0
+    )
+})
+}
+    
+
+    
+}
+
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceKeypairSigner {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    //
+    // This creates 1-element array, since this seems to be the only way to construct a const
+    // pointer that we can pass to the Rust code.
+    static let vtable: [UniffiVTableCallbackInterfaceKeypairSigner] = [UniffiVTableCallbackInterfaceKeypairSigner(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterTypeKeypairSigner.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface KeypairSigner: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterTypeKeypairSigner.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface KeypairSigner: handle missing in uniffiClone")
+            }
+        },
+        publicKey: { (
+            uniffiHandle: UInt64,
+            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> Data in
+                guard let uniffiObj = try? FfiConverterTypeKeypairSigner.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try uniffiObj.publicKey(
+                )
+            }
+
+            
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterData.lower($0) }
+            uniffiTraitInterfaceCallWithError(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn,
+                lowerError: FfiConverterTypeKeypairSignerError_lower
+            )
+        },
+        signDigest: { (
+            uniffiHandle: UInt64,
+            digest: RustBuffer,
+            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> Data in
+                guard let uniffiObj = try? FfiConverterTypeKeypairSigner.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try uniffiObj.signDigest(
+                     digest: try FfiConverterData.lift(digest)
+                )
+            }
+
+            
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterData.lower($0) }
+            uniffiTraitInterfaceCallWithError(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn,
+                lowerError: FfiConverterTypeKeypairSignerError_lower
+            )
+        }
+    )]
+}
+
+private func uniffiCallbackInitKeypairSigner() {
+    uniffi_bedrock_fn_init_callback_vtable_keypairsigner(UniffiCallbackInterfaceKeypairSigner.vtable)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeKeypairSigner: FfiConverter {
+    fileprivate static let handleMap = UniffiHandleMap<KeypairSigner>()
+
+    typealias FfiType = UInt64
+    typealias SwiftType = KeypairSigner
+
+    public static func lift(_ handle: UInt64) throws -> KeypairSigner {
+        if ((handle & 1) == 0) {
+            // Rust-generated handle, construct a new class that uses the handle to implement the
+            // interface
+            return KeypairSignerImpl(unsafeFromHandle: handle)
+        } else {
+            // Swift-generated handle, get the object from the handle map
+            return try handleMap.remove(handle: handle)
+        }
+    }
+
+    public static func lower(_ value: KeypairSigner) -> UInt64 {
+         if let rustImpl = value as? KeypairSignerImpl {
+             // Rust-implemented object.  Clone the handle and return it
+            return rustImpl.uniffiCloneHandle()
+         } else {
+            // Swift object, generate a new vtable handle and return that.
+            return handleMap.insert(obj: value)
+         }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> KeypairSigner {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: KeypairSigner, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeKeypairSigner_lift(_ handle: UInt64) throws -> KeypairSigner {
+    return try FfiConverterTypeKeypairSigner.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeKeypairSigner_lower(_ value: KeypairSigner) -> UInt64 {
+    return FfiConverterTypeKeypairSigner.lower(value)
+}
+
+
+
+
+
+
+/**
  * Trait representing a logger that can log messages at various levels.
  *
  * This trait should be implemented by any logger that wants to receive log messages.
@@ -5479,6 +5758,146 @@ public func FfiConverterTypeNtp_lift(_ handle: UInt64) throws -> Ntp {
 #endif
 public func FfiConverterTypeNtp_lower(_ value: Ntp) -> UInt64 {
     return FfiConverterTypeNtp.lower(value)
+}
+
+
+
+
+
+
+/**
+ * A [`KeypairSigner`] pinned to the **P-256** curve.
+ *
+ * Its public key is fetched once and validated as a compressed SEC1 P-256 point,
+ * so downstream stamping can reuse it without re-querying or re-validating.
+ */
+public protocol P256SignerProtocol: AnyObject, Sendable {
+    
+}
+/**
+ * A [`KeypairSigner`] pinned to the **P-256** curve.
+ *
+ * Its public key is fetched once and validated as a compressed SEC1 P-256 point,
+ * so downstream stamping can reuse it without re-querying or re-validating.
+ */
+open class P256Signer: P256SignerProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_p256signer(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_bedrock_fn_free_p256signer(handle, $0) }
+    }
+
+    
+    /**
+     * Validates `signer`'s public key and wraps it for reuse.
+     *
+     * Foreign callers construct this **before** invoking migration APIs, so an
+     * invalid key fails here with a clear [`KeypairSignerError`] rather than an
+     * opaque error from a later call. The public key is fetched once and checked
+     * to be a 33-byte compressed SEC1 P-256 point; the resulting handle can be
+     * reused across calls (e.g. re-invoking with the main factor).
+     *
+     * # Errors
+     * - [`KeypairSignerError`] if the signer cannot produce its public key.
+     * - [`KeypairSignerError::InvalidPublicKey`] if the key is not a 33-byte
+     * compressed SEC1 encoding or not a valid point on the P-256 curve.
+     */
+public static func verify(signer: KeypairSigner)throws  -> P256Signer  {
+    return try  FfiConverterTypeP256Signer_lift(try rustCallWithError(FfiConverterTypeKeypairSignerError_lift) {
+    uniffi_bedrock_fn_constructor_p256signer_verify(
+        FfiConverterTypeKeypairSigner_lower(signer),$0
+    )
+})
+}
+    
+
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeP256Signer: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = P256Signer
+
+    public static func lift(_ handle: UInt64) throws -> P256Signer {
+        return P256Signer(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: P256Signer) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> P256Signer {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: P256Signer, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeP256Signer_lift(_ handle: UInt64) throws -> P256Signer {
+    return try FfiConverterTypeP256Signer.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeP256Signer_lower(_ value: P256Signer) -> UInt64 {
+    return FfiConverterTypeP256Signer.lower(value)
 }
 
 
@@ -7549,6 +7968,9 @@ public func FfiConverterTypeToolingDemo_lower(_ value: ToolingDemo) -> UInt64 {
 
 /**
  * Allows interactions with Turnkey API.
+ *
+ * DEPRECATION NOTICE: Interactions with Turnkey will be migrated to be handled from
+ * within Bedrock. This class should disappear in favor of [`TurnkeyManager`]
  */
 public protocol TurnkeyProtocol: AnyObject, Sendable {
     
@@ -7667,6 +8089,9 @@ public protocol TurnkeyProtocol: AnyObject, Sendable {
 }
 /**
  * Allows interactions with Turnkey API.
+ *
+ * DEPRECATION NOTICE: Interactions with Turnkey will be migrated to be handled from
+ * within Bedrock. This class should disappear in favor of [`TurnkeyManager`]
  */
 open class Turnkey: TurnkeyProtocol, @unchecked Sendable {
     fileprivate let handle: UInt64
@@ -7925,6 +8350,207 @@ public func FfiConverterTypeTurnkey_lift(_ handle: UInt64) throws -> Turnkey {
 #endif
 public func FfiConverterTypeTurnkey_lower(_ value: Turnkey) -> UInt64 {
     return FfiConverterTypeTurnkey.lower(value)
+}
+
+
+
+
+
+
+/**
+ * High level manager to perform Turnkey account operations such as setup and
+ * migration reconciliation.
+ *
+ * For use from foreign bindings.
+ */
+public protocol TurnkeyManagerProtocol: AnyObject, Sendable {
+    
+    /**
+     * Reviews the Turnkey account state and applies any required migrations to
+     * bring the user's sub-organization in line with the expected configuration.
+     *
+     * Migrations that can run with the `sync_factor` alone run immediately;
+     * those that require the `main_factor` are deferred and reported via
+     * [`TurnkeyMigrationOutcome::MainFactorRequired`] when it is absent, so the
+     * caller can re-invoke with the main factor.
+     *
+     * # Arguments
+     * - `suborganization_id`: the user's Turnkey sub-organization id. When
+     * `None`, it is resolved via Turnkey `whoami` stamped with the sync factor.
+     * - `sync_factor`: a [`P256Signer`] the caller has already constructed — and
+     * thereby validated — from its sync signer; stamps read/query requests and
+     * resolves the sub-organization.
+     * - `main_factor`: an optional [`P256Signer`] for privileged writes with
+     * [`policies::AUTH_USER_MAIN_USERNAME`], i.e. the ephemeral session key established
+     * from a Main Factor.
+     *
+     * # Threading
+     * This performs network I/O and may poll Turnkey activities to completion,
+     * so it can take a while. Callers MUST invoke it off the main thread.
+     *
+     * # Errors
+     * Returns [`TurnkeyMigrationError`] if the run fails. Diagnostic detail is
+     * logged inside Bedrock and intentionally not surfaced.
+     */
+    func runMigrations(suborganizationId: String?, syncFactor: P256Signer, mainFactor: P256Signer?) async throws  -> TurnkeyMigrationOutcome
+    
+}
+/**
+ * High level manager to perform Turnkey account operations such as setup and
+ * migration reconciliation.
+ *
+ * For use from foreign bindings.
+ */
+open class TurnkeyManager: TurnkeyManagerProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_turnkeymanager(self.handle, $0) }
+    }
+    /**
+     * Creates a new `TurnkeyManager`.
+     */
+public convenience init() {
+    let handle =
+        try! rustCall() {
+    uniffi_bedrock_fn_constructor_turnkeymanager_new($0
+    )
+}
+    self.init(unsafeFromHandle: handle)
+}
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_bedrock_fn_free_turnkeymanager(handle, $0) }
+    }
+
+    
+
+    
+    /**
+     * Reviews the Turnkey account state and applies any required migrations to
+     * bring the user's sub-organization in line with the expected configuration.
+     *
+     * Migrations that can run with the `sync_factor` alone run immediately;
+     * those that require the `main_factor` are deferred and reported via
+     * [`TurnkeyMigrationOutcome::MainFactorRequired`] when it is absent, so the
+     * caller can re-invoke with the main factor.
+     *
+     * # Arguments
+     * - `suborganization_id`: the user's Turnkey sub-organization id. When
+     * `None`, it is resolved via Turnkey `whoami` stamped with the sync factor.
+     * - `sync_factor`: a [`P256Signer`] the caller has already constructed — and
+     * thereby validated — from its sync signer; stamps read/query requests and
+     * resolves the sub-organization.
+     * - `main_factor`: an optional [`P256Signer`] for privileged writes with
+     * [`policies::AUTH_USER_MAIN_USERNAME`], i.e. the ephemeral session key established
+     * from a Main Factor.
+     *
+     * # Threading
+     * This performs network I/O and may poll Turnkey activities to completion,
+     * so it can take a while. Callers MUST invoke it off the main thread.
+     *
+     * # Errors
+     * Returns [`TurnkeyMigrationError`] if the run fails. Diagnostic detail is
+     * logged inside Bedrock and intentionally not surfaced.
+     */
+open func runMigrations(suborganizationId: String?, syncFactor: P256Signer, mainFactor: P256Signer?)async throws  -> TurnkeyMigrationOutcome  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_turnkeymanager_run_migrations(
+                    self.uniffiCloneHandle(),
+                    FfiConverterOptionString.lower(suborganizationId),FfiConverterTypeP256Signer_lower(syncFactor),FfiConverterOptionTypeP256Signer.lower(mainFactor)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
+            completeFunc: ffi_bedrock_rust_future_complete_rust_buffer,
+            freeFunc: ffi_bedrock_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeTurnkeyMigrationOutcome_lift,
+            errorHandler: FfiConverterTypeTurnkeyMigrationError_lift
+        )
+}
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTurnkeyManager: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = TurnkeyManager
+
+    public static func lift(_ handle: UInt64) throws -> TurnkeyManager {
+        return TurnkeyManager(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: TurnkeyManager) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TurnkeyManager {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: TurnkeyManager, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTurnkeyManager_lift(_ handle: UInt64) throws -> TurnkeyManager {
+    return try FfiConverterTypeTurnkeyManager.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTurnkeyManager_lower(_ value: TurnkeyManager) -> UInt64 {
+    return FfiConverterTypeTurnkeyManager.lower(value)
 }
 
 
@@ -12095,6 +12721,138 @@ public func FfiConverterTypeKeyValueStoreError_lower(_ value: KeyValueStoreError
     return FfiConverterTypeKeyValueStoreError.lower(value)
 }
 
+
+/**
+ * Errors returned by a [`KeypairSigner`] implementation.
+ */
+public enum KeypairSignerError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+
+    
+    
+    /**
+     * The signing key is unavailable or the operation was rejected (for example
+     * secure storage is locked or the user cancelled a prompt).
+     */
+    case Unavailable
+    /**
+     * The key material is malformed or of an unexpected type.
+     */
+    case InvalidKey
+    /**
+     * The public key returned by the signer is malformed: wrong length, not a
+     * valid compressed SEC1 encoding, or not a point on the P-256 curve.
+     */
+    case InvalidPublicKey(
+        /**
+         * Human-readable reason the key was rejected.
+         */errorMessage: String
+    )
+    /**
+     * A generic error that can wrap any anyhow error.
+     */
+    case Generic(
+        /**
+         * The error message from the wrapped error.
+         */errorMessage: String
+    )
+    /**
+     * Filesystem operation error.
+     */
+    case FileSystem(FileSystemError
+    )
+
+    
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
+}
+
+#if compiler(>=6)
+extension KeypairSignerError: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeKeypairSignerError: FfiConverterRustBuffer {
+    typealias SwiftType = KeypairSignerError
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> KeypairSignerError {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        
+
+        
+        case 1: return .Unavailable
+        case 2: return .InvalidKey
+        case 3: return .InvalidPublicKey(
+            errorMessage: try FfiConverterString.read(from: &buf)
+            )
+        case 4: return .Generic(
+            errorMessage: try FfiConverterString.read(from: &buf)
+            )
+        case 5: return .FileSystem(
+            try FfiConverterTypeFileSystemError.read(from: &buf)
+            )
+
+         default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: KeypairSignerError, into buf: inout [UInt8]) {
+        switch value {
+
+        
+
+        
+        
+        case .Unavailable:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .InvalidKey:
+            writeInt(&buf, Int32(2))
+        
+        
+        case let .InvalidPublicKey(errorMessage):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(errorMessage, into: &buf)
+            
+        
+        case let .Generic(errorMessage):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(errorMessage, into: &buf)
+            
+        
+        case let .FileSystem(v1):
+            writeInt(&buf, Int32(5))
+            FfiConverterTypeFileSystemError.write(v1, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeKeypairSignerError_lift(_ buf: RustBuffer) throws -> KeypairSignerError {
+    return try FfiConverterTypeKeypairSignerError.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeKeypairSignerError_lower(_ value: KeypairSignerError) -> RustBuffer {
+    return FfiConverterTypeKeypairSignerError.lower(value)
+}
+
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
@@ -14111,6 +14869,188 @@ public func FfiConverterTypeTurnkeyError_lower(_ value: TurnkeyError) -> RustBuf
     return FfiConverterTypeTurnkeyError.lower(value)
 }
 
+
+/**
+ * Opaque error returned to clients when a Turnkey migration run fails.
+ *
+ * All diagnostic detail is logged inside Bedrock (see [`TurnkeyApiError`]); the
+ * client only learns that the run did not succeed.
+ */
+public enum TurnkeyMigrationError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+
+    
+    
+    /**
+     * The run failed fairly permanent; retrying will not help. Typically a
+     * misconfiguration, a consistency error, or an unauthorized signer.
+     */
+    case Failed
+    /**
+     * The run failed transiently (timeout, connectivity, rate limiting, an
+     * overall deadline, or a concurrent run). A later retry may succeed.
+     */
+    case Retryable
+    /**
+     * A migration is already in progress. Only one migration can be running at a time.
+     */
+    case AlreadyInProgress
+
+    
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
+}
+
+#if compiler(>=6)
+extension TurnkeyMigrationError: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTurnkeyMigrationError: FfiConverterRustBuffer {
+    typealias SwiftType = TurnkeyMigrationError
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TurnkeyMigrationError {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        
+
+        
+        case 1: return .Failed
+        case 2: return .Retryable
+        case 3: return .AlreadyInProgress
+
+         default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: TurnkeyMigrationError, into buf: inout [UInt8]) {
+        switch value {
+
+        
+
+        
+        
+        case .Failed:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .Retryable:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .AlreadyInProgress:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTurnkeyMigrationError_lift(_ buf: RustBuffer) throws -> TurnkeyMigrationError {
+    return try FfiConverterTypeTurnkeyMigrationError.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTurnkeyMigrationError_lower(_ value: TurnkeyMigrationError) -> RustBuffer {
+    return FfiConverterTypeTurnkeyMigrationError.lower(value)
+}
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * Global result from running the entire set of migrations.
+ */
+
+public enum TurnkeyMigrationOutcome: Equatable, Hashable {
+    
+    /**
+     * Every applicable migration completed (or was already satisfied).
+     */
+    case completed
+    /**
+     * One or more migrations still need to run but require the main factor,
+     * which was not provided. Re-invoke with the main factor to apply them.
+     */
+    case mainFactorRequired(
+        /**
+         * Human-friendly descriptions of the migrations awaiting the main factor.
+         */pending: [String]
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension TurnkeyMigrationOutcome: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTurnkeyMigrationOutcome: FfiConverterRustBuffer {
+    typealias SwiftType = TurnkeyMigrationOutcome
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TurnkeyMigrationOutcome {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .completed
+        
+        case 2: return .mainFactorRequired(pending: try FfiConverterSequenceString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: TurnkeyMigrationOutcome, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .completed:
+            writeInt(&buf, Int32(1))
+        
+        
+        case let .mainFactorRequired(pending):
+            writeInt(&buf, Int32(2))
+            FfiConverterSequenceString.write(pending, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTurnkeyMigrationOutcome_lift(_ buf: RustBuffer) throws -> TurnkeyMigrationOutcome {
+    return try FfiConverterTypeTurnkeyMigrationOutcome.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTurnkeyMigrationOutcome_lower(_ value: TurnkeyMigrationOutcome) -> RustBuffer {
+    return FfiConverterTypeTurnkeyMigrationOutcome.lower(value)
+}
+
+
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
@@ -14373,6 +15313,30 @@ fileprivate struct FfiConverterOptionTypeBedrockConfig: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeBedrockConfig.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeP256Signer: FfiConverterRustBuffer {
+    typealias SwiftType = P256Signer?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeP256Signer.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeP256Signer.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -14949,22 +15913,20 @@ public func setHttpClient(httpClient: AuthenticatedHttpClient)  {try! rustCall()
 }
 }
 /**
- * Sets the global logger.
+ * Sets the logger that receives Bedrock's log messages.
  *
- * This function allows you to provide your own implementation of the `Logger` trait.
- * It initializes the logging system and should be called before any logging occurs.
+ * Bedrock's own instrumentation is delivered to `logger` **directly**, so it is
+ * unaffected by whichever Rust library in the process owns the global `tracing`
+ * dispatcher. As a best effort, this also installs a global `tracing` subscriber
+ * to forward relevant *dependency* logs (notably siegel's `mlock` warning).
  *
  * # Arguments
  *
  * * `logger` - An `Arc` containing your logger implementation.
  *
- * # Panics
- *
- * Panics if the logger has already been set.
- *
  * # Note
  *
- * If the logger has already been set, this function will print a message and do nothing.
+ * Only the first logger is used; later calls keep the original and are no-ops.
  */
 public func setLogger(logger: Logger)  {try! rustCall() {
     uniffi_bedrock_fn_func_set_logger(
@@ -15082,7 +16044,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_func_set_http_client() != 43643) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_func_set_logger() != 7633) {
+    if (uniffi_bedrock_checksum_func_set_logger() != 11830) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_func_set_time_provider() != 54619) {
@@ -15158,6 +16120,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_turnkey_stamp_with_backup_account_key() != 34668) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_turnkeymanager_run_migrations() != 9401) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_migrationcontroller_delete_all_records() != 44884) {
@@ -15239,6 +16204,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_ntp_now_millis() != 25299) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_keypairsigner_public_key() != 13151) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_keypairsigner_sign_digest() != 59611) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_filesystemtester_test_delete_file() != 26183) {
@@ -15394,6 +16365,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_constructor_turnkey_new() != 46031) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_constructor_turnkeymanager_new() != 29118) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_constructor_migrationcontroller_new() != 60371) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -15407,6 +16381,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_bedrockconfig_new() != 4256) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_constructor_p256signer_verify() != 51314) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_filesystemtester_new() != 50441) {
@@ -15447,6 +16424,7 @@ private let initializationResult: InitializationResult = {
     uniffiCallbackInitBackupServiceApi()
     uniffiCallbackInitDeviceKeyValueStore()
     uniffiCallbackInitFileSystem()
+    uniffiCallbackInitKeypairSigner()
     uniffiCallbackInitLogger()
     uniffiCallbackInitMigrationProcessor()
     uniffiCallbackInitNtp()
