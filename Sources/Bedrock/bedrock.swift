@@ -4034,7 +4034,7 @@ public protocol KeypairSigner: AnyObject, Sendable {
     func publicKey() throws  -> Data
     
     /**
-     * Signs a pre-computed digest with the private key. Signature MUST be normalized (low S).
+     * Signs a pre-computed digest with the private key.
      *
      * # Errors
      * Returns [`KeypairSignerError`] if signing is rejected or the key is unavailable.
@@ -4127,7 +4127,7 @@ open func publicKey()throws  -> Data  {
 }
     
     /**
-     * Signs a pre-computed digest with the private key. Signature MUST be normalized (low S).
+     * Signs a pre-computed digest with the private key.
      *
      * # Errors
      * Returns [`KeypairSignerError`] if signing is rejected or the key is unavailable.
@@ -6082,6 +6082,158 @@ public func FfiConverterTypeRootKey_lift(_ handle: UInt64) throws -> RootKey {
 #endif
 public func FfiConverterTypeRootKey_lower(_ value: RootKey) -> UInt64 {
     return FfiConverterTypeRootKey.lower(value)
+}
+
+
+
+
+
+
+/**
+ * Migration processor that repairs the ERC-4337 configuration of a Safe that
+ * was deployed without the [`GNOSIS_SAFE_4337_MODULE`].
+ *
+ * [`GNOSIS_SAFE_4337_MODULE`]: crate::smart_account::GNOSIS_SAFE_4337_MODULE
+ */
+public protocol Safe4337ModuleProcessorProtocol: AnyObject, Sendable {
+    
+    /**
+     * Returns this processor as a [`MigrationProcessor`] trait object so it can
+     * be registered with
+     * [`MigrationController`](crate::migration::MigrationController) via its
+     * `additional_processors` argument.
+     */
+    func asMigrationProcessor()  -> MigrationProcessor
+    
+}
+/**
+ * Migration processor that repairs the ERC-4337 configuration of a Safe that
+ * was deployed without the [`GNOSIS_SAFE_4337_MODULE`].
+ *
+ * [`GNOSIS_SAFE_4337_MODULE`]: crate::smart_account::GNOSIS_SAFE_4337_MODULE
+ */
+open class Safe4337ModuleProcessor: Safe4337ModuleProcessorProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_safe4337moduleprocessor(self.handle, $0) }
+    }
+    /**
+     * Creates a processor that repairs the ERC-4337 configuration of
+     * `safe_account` (on World Chain).
+     */
+public convenience init(safeAccount: SafeSmartAccount) {
+    let handle =
+        try! rustCall() {
+    uniffi_bedrock_fn_constructor_safe4337moduleprocessor_new(
+        FfiConverterTypeSafeSmartAccount_lower(safeAccount),$0
+    )
+}
+    self.init(unsafeFromHandle: handle)
+}
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_bedrock_fn_free_safe4337moduleprocessor(handle, $0) }
+    }
+
+    
+
+    
+    /**
+     * Returns this processor as a [`MigrationProcessor`] trait object so it can
+     * be registered with
+     * [`MigrationController`](crate::migration::MigrationController) via its
+     * `additional_processors` argument.
+     */
+open func asMigrationProcessor() -> MigrationProcessor  {
+    return try!  FfiConverterTypeMigrationProcessor_lift(try! rustCall() {
+    uniffi_bedrock_fn_method_safe4337moduleprocessor_as_migration_processor(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSafe4337ModuleProcessor: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = Safe4337ModuleProcessor
+
+    public static func lift(_ handle: UInt64) throws -> Safe4337ModuleProcessor {
+        return Safe4337ModuleProcessor(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: Safe4337ModuleProcessor) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Safe4337ModuleProcessor {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: Safe4337ModuleProcessor, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSafe4337ModuleProcessor_lift(_ handle: UInt64) throws -> Safe4337ModuleProcessor {
+    return try FfiConverterTypeSafe4337ModuleProcessor.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSafe4337ModuleProcessor_lower(_ value: Safe4337ModuleProcessor) -> UInt64 {
+    return FfiConverterTypeSafe4337ModuleProcessor.lower(value)
 }
 
 
@@ -12739,6 +12891,10 @@ public enum KeypairSignerError: Swift.Error, Equatable, Hashable, Foundation.Loc
      */
     case InvalidKey
     /**
+     * The trait implementation provided an invalid signature for the specific curve.
+     */
+    case InvalidSignature
+    /**
      * The public key returned by the signer is malformed: wrong length, not a
      * valid compressed SEC1 encoding, or not a point on the P-256 curve.
      */
@@ -12791,13 +12947,14 @@ public struct FfiConverterTypeKeypairSignerError: FfiConverterRustBuffer {
         
         case 1: return .Unavailable
         case 2: return .InvalidKey
-        case 3: return .InvalidPublicKey(
+        case 3: return .InvalidSignature
+        case 4: return .InvalidPublicKey(
             errorMessage: try FfiConverterString.read(from: &buf)
             )
-        case 4: return .Generic(
+        case 5: return .Generic(
             errorMessage: try FfiConverterString.read(from: &buf)
             )
-        case 5: return .FileSystem(
+        case 6: return .FileSystem(
             try FfiConverterTypeFileSystemError.read(from: &buf)
             )
 
@@ -12820,18 +12977,22 @@ public struct FfiConverterTypeKeypairSignerError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(2))
         
         
-        case let .InvalidPublicKey(errorMessage):
+        case .InvalidSignature:
             writeInt(&buf, Int32(3))
-            FfiConverterString.write(errorMessage, into: &buf)
-            
         
-        case let .Generic(errorMessage):
+        
+        case let .InvalidPublicKey(errorMessage):
             writeInt(&buf, Int32(4))
             FfiConverterString.write(errorMessage, into: &buf)
             
         
-        case let .FileSystem(v1):
+        case let .Generic(errorMessage):
             writeInt(&buf, Int32(5))
+            FfiConverterString.write(errorMessage, into: &buf)
+            
+        
+        case let .FileSystem(v1):
+            writeInt(&buf, Int32(6))
             FfiConverterTypeFileSystemError.write(v1, into: &buf)
             
         }
@@ -16143,6 +16304,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_migrationprocessor_execute() != 7502) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_method_safe4337moduleprocessor_as_migration_processor() != 52124) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_method_enclaveattestationverifier_verify_attestation_document_and_encrypt() != 2460) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -16209,7 +16373,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_keypairsigner_public_key() != 13151) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_keypairsigner_sign_digest() != 59611) {
+    if (uniffi_bedrock_checksum_method_keypairsigner_sign_digest() != 17786) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_filesystemtester_test_delete_file() != 26183) {
@@ -16369,6 +16533,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_migrationcontroller_new() != 60371) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_constructor_safe4337moduleprocessor_new() != 20630) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_enclaveattestationverifier_new() != 36598) {
