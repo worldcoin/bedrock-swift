@@ -39,6 +39,52 @@ fileprivate extension ForeignBytes {
     init(bufferPointer: UnsafeBufferPointer<UInt8>) {
         self.init(len: Int32(bufferPointer.count), data: bufferPointer.baseAddress)
     }
+
+    init(rawBufferPointer: UnsafeRawBufferPointer) {
+        self.init(
+            len: Int32(rawBufferPointer.count),
+            data: rawBufferPointer.baseAddress?.assumingMemoryBound(to: UInt8.self)
+        )
+    }
+}
+
+// Converter for `&[u8]` / `[ByRef] bytes` arguments.
+//
+// Conforms to `FfiConverter` so the compiler enforces the full converter
+// method set. Only the scope-bound `lower(_:_body:)` overload is sound —
+// zero-copy byte buffers only flow foreign -> Rust, and only in argument
+// position. The four protocol-witness methods (`lift`, `lower`, `read`,
+// `write`) `fatalError` at runtime if anyone reaches them.
+//
+// The scope-bound `lower` takes a closure because the `ForeignBytes`
+// pointer is only guaranteed valid for the duration of
+// `Data.withUnsafeBytes`. Callers must run the full FFI call inside
+// the closure body.
+fileprivate enum FfiConverterByRefBytes: FfiConverter {
+    typealias SwiftType = Data
+    typealias FfiType = ForeignBytes
+
+    static func lower<R>(_ value: Data, _ body: (ForeignBytes) throws -> R) rethrows -> R {
+        return try value.withUnsafeBytes { rawBuf in
+            try body(ForeignBytes(rawBufferPointer: rawBuf))
+        }
+    }
+
+    static func lower(_ value: Data) -> ForeignBytes {
+        fatalError("ByRef bytes cannot use the plain lower: returning ForeignBytes escapes the Data.withUnsafeBytes scope. Use the scope-bound lower(_:_body:) overload instead.")
+    }
+
+    static func lift(_ value: ForeignBytes) throws -> Data {
+        fatalError("ByRef bytes cannot be lifted: zero-copy &[u8] only flows foreign->Rust")
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Data {
+        fatalError("ByRef bytes cannot be read from a buffer: zero-copy &[u8] is only supported in argument position, not nested in records/options/etc.")
+    }
+
+    static func write(_ value: Data, into buf: inout [UInt8]) {
+        fatalError("ByRef bytes cannot be written to a buffer: zero-copy &[u8] is only supported in argument position, not nested in records/options/etc.")
+    }
 }
 
 // For every type used in the interface, we provide helper methods for conveniently
@@ -525,7 +571,11 @@ fileprivate struct FfiConverterString: FfiConverter {
             return String()
         }
         let bytes = UnsafeBufferPointer<UInt8>(start: value.data!, count: Int(value.len))
-        return String(bytes: bytes, encoding: String.Encoding.utf8)!
+        // Use Swift's native UTF-8 decoder; `String(bytes:encoding:.utf8)` goes
+        // through Foundation's NSString and silently strips a leading U+FEFF BOM.
+        // Invalid UTF-8 substitutes U+FFFD instead of trapping (unreachable
+        // given Rust's `String` invariant).
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     public static func lower(_ value: String) -> RustBuffer {
@@ -541,7 +591,8 @@ fileprivate struct FfiConverterString: FfiConverter {
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> String {
         let len: Int32 = try readInt(&buf)
-        return String(bytes: try readBytes(&buf, count: Int(len)), encoding: String.Encoding.utf8)!
+        // See `lift` above for why we avoid Foundation's NSString-backed decoder here.
+        return String(decoding: try readBytes(&buf, count: Int(len)), as: UTF8.self)
     }
 
     public static func write(_ value: String, into buf: inout [UInt8]) {
@@ -713,8 +764,7 @@ open func fetchFromAppBackend(url: String, method: HttpMethod, headers: [HttpHea
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_authenticatedhttpclient_fetch_from_app_backend(
-                    self.uniffiCloneHandle(),
-                    FfiConverterString.lower(url),FfiConverterTypeHttpMethod_lower(method),FfiConverterSequenceTypeHttpHeader.lower(headers),FfiConverterOptionData.lower(body)
+                        self.uniffiCloneHandle(),FfiConverterString.lower(url),FfiConverterTypeHttpMethod_lower(method),FfiConverterSequenceTypeHttpHeader.lower(headers),FfiConverterOptionData.lower(body)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
@@ -737,9 +787,8 @@ fileprivate struct UniffiCallbackInterfaceAuthenticatedHttpClient {
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
     //
-    // This creates 1-element array, since this seems to be the only way to construct a const
-    // pointer that we can pass to the Rust code.
-    static let vtable: [UniffiVTableCallbackInterfaceAuthenticatedHttpClient] = [UniffiVTableCallbackInterfaceAuthenticatedHttpClient(
+    // Store the vtable directly.
+    static let vtable: UniffiVTableCallbackInterfaceAuthenticatedHttpClient = UniffiVTableCallbackInterfaceAuthenticatedHttpClient(
         uniffiFree: { (uniffiHandle: UInt64) -> () in
             do {
                 try FfiConverterTypeAuthenticatedHttpClient.handleMap.remove(handle: uniffiHandle)
@@ -803,11 +852,23 @@ fileprivate struct UniffiCallbackInterfaceAuthenticatedHttpClient {
                 droppedCallback: uniffiOutDroppedCallback
             )
         }
-    )]
+    )
+
+    // Rust stores this pointer for future callback invocations, so it must live
+    // for the process lifetime (not just for the init function call).
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceAuthenticatedHttpClient> = {
+        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceAuthenticatedHttpClient>.allocate(capacity: 1)
+        ptr.initialize(to: vtable)
+        return UnsafePointer(ptr)
+    }()
 }
 
 private func uniffiCallbackInitAuthenticatedHttpClient() {
-    uniffi_bedrock_fn_init_callback_vtable_authenticatedhttpclient(UniffiCallbackInterfaceAuthenticatedHttpClient.vtable)
+    uniffi_bedrock_fn_init_callback_vtable_authenticatedhttpclient(UniffiCallbackInterfaceAuthenticatedHttpClient.vtablePtr)
 }
 
 #if swift(>=5.8)
@@ -1114,7 +1175,8 @@ open class BackupManager: BackupManagerProtocol, @unchecked Sendable {
 public convenience init() {
     let handle =
         try! rustCall() {
-    uniffi_bedrock_fn_constructor_backupmanager_new($0
+        uniffiCallStatus in
+    uniffi_bedrock_fn_constructor_backupmanager_new(uniffiCallStatus
     )
 }
     self.init(unsafeFromHandle: handle)
@@ -1158,13 +1220,14 @@ public convenience init() {
      */
 open func addNewFactor(encryptedBackupKeyWithExistingFactorSecret: String, existingFactorSecret: String, newFactorSecret: String, existingFactorType: FactorType, newFactorType: FactorType)throws  -> AddNewFactorResult  {
     return try  FfiConverterTypeAddNewFactorResult_lift(try rustCallWithError(FfiConverterTypeBackupError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_backupmanager_add_new_factor(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(encryptedBackupKeyWithExistingFactorSecret),
         FfiConverterString.lower(existingFactorSecret),
         FfiConverterString.lower(newFactorSecret),
         FfiConverterTypeFactorType_lower(existingFactorType),
-        FfiConverterTypeFactorType_lower(newFactorType),$0
+        FfiConverterTypeFactorType_lower(newFactorType),uniffiCallStatus
     )
 })
 }
@@ -1189,11 +1252,12 @@ open func addNewFactor(encryptedBackupKeyWithExistingFactorSecret: String, exist
      */
 open func createSealedBackupForNewUser(rootSecret: String, factorSecret: String, factorType: FactorType)throws  -> CreatedBackup  {
     return try  FfiConverterTypeCreatedBackup_lift(try rustCallWithError(FfiConverterTypeBackupError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_backupmanager_create_sealed_backup_for_new_user(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(rootSecret),
         FfiConverterString.lower(factorSecret),
-        FfiConverterTypeFactorType_lower(factorType),$0
+        FfiConverterTypeFactorType_lower(factorType),uniffiCallStatus
     )
 })
 }
@@ -1206,8 +1270,9 @@ open func createSealedBackupForNewUser(rootSecret: String, factorSecret: String,
      */
 open func debugGetLocalManifest()throws  -> ManifestDebug  {
     return try  FfiConverterTypeManifestDebug_lift(try rustCallWithError(FfiConverterTypeBackupError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_backupmanager_debug_get_local_manifest(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -1241,13 +1306,16 @@ open func debugGetLocalManifest()throws  -> ManifestDebug  {
      */
 open func decryptAndUnpackSealedBackup(sealedBackupData: Data, encryptedBackupKeypair: String, factorSecret: String, factorType: FactorType)throws  -> DecryptedBackup  {
     return try  FfiConverterTypeDecryptedBackup_lift(try rustCallWithError(FfiConverterTypeBackupError_lift) {
+        uniffiCallStatus in
+        FfiConverterByRefBytes.lower(sealedBackupData) { sealedBackupDataFb in
     uniffi_bedrock_fn_method_backupmanager_decrypt_and_unpack_sealed_backup(
             self.uniffiCloneHandle(),
-        FfiConverterData.lower(sealedBackupData),
+        sealedBackupDataFb,
         FfiConverterString.lower(encryptedBackupKeypair),
         FfiConverterString.lower(factorSecret),
-        FfiConverterTypeFactorType_lower(factorType),$0
+        FfiConverterTypeFactorType_lower(factorType),uniffiCallStatus
     )
+        }
 })
 }
     
@@ -1262,9 +1330,10 @@ open func decryptAndUnpackSealedBackup(sealedBackupData: Data, encryptedBackupKe
      */
 open func getBackupAccount(rootSecret: SiegelSession)throws  -> BackupAccount  {
     return try  FfiConverterTypeBackupAccount_lift(try rustCallWithError(FfiConverterTypeBackupError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_backupmanager_get_backup_account(
             self.uniffiCloneHandle(),
-        FfiConverterTypeSiegelSession_lower(rootSecret),$0
+        FfiConverterTypeSiegelSession_lower(rootSecret),uniffiCallStatus
     )
 })
 }
@@ -1280,9 +1349,10 @@ open func getBackupAccount(rootSecret: SiegelSession)throws  -> BackupAccount  {
      */
 open func isLocalBackupStale(remoteManifestHash: String)throws  -> Bool  {
     return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeBackupError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_backupmanager_is_local_backup_stale(
             self.uniffiCloneHandle(),
-        FfiConverterString.lower(remoteManifestHash),$0
+        FfiConverterString.lower(remoteManifestHash),uniffiCallStatus
     )
 })
 }
@@ -1299,8 +1369,9 @@ open func isLocalBackupStale(remoteManifestHash: String)throws  -> Bool  {
      * - Returns an error if the post-processing fails.
      */
 open func postDeleteBackup()throws   {try rustCallWithError(FfiConverterTypeBackupError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_backupmanager_post_delete_backup(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 }
 }
@@ -1327,8 +1398,7 @@ open func sendEvent(kind: BackupReportEventKind, success: Bool, errorMessage: St
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_backupmanager_send_event(
-                    self.uniffiCloneHandle(),
-                    FfiConverterTypeBackupReportEventKind_lower(kind),FfiConverterBool.lower(success),FfiConverterOptionString.lower(errorMessage),FfiConverterString.lower(timestampIso8601),FfiConverterBool.lower(isPublic)
+                        self.uniffiCloneHandle(),FfiConverterTypeBackupReportEventKind_lower(kind),FfiConverterBool.lower(success),FfiConverterOptionString.lower(errorMessage),FfiConverterString.lower(timestampIso8601),FfiConverterBool.lower(isPublic)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_void,
@@ -1343,9 +1413,10 @@ open func sendEvent(kind: BackupReportEventKind, success: Bool, errorMessage: St
      * **Client Event Streams**. Set the base report attributes for event reports.
      */
 open func setBackupReportAttributes(input: BackupReportInput)  {try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_backupmanager_set_backup_report_attributes(
             self.uniffiCloneHandle(),
-        FfiConverterTypeBackupReportInput_lower(input),$0
+        FfiConverterTypeBackupReportInput_lower(input),uniffiCallStatus
     )
 }
 }
@@ -1366,11 +1437,14 @@ open func setBackupReportAttributes(input: BackupReportInput)  {try! rustCall() 
      */
 open func signWithBackupAccountKey(rootSecret: String, challenge: Data)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeBackupError_lift) {
+        uniffiCallStatus in
+        FfiConverterByRefBytes.lower(challenge) { challengeFb in
     uniffi_bedrock_fn_method_backupmanager_sign_with_backup_account_key(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(rootSecret),
-        FfiConverterData.lower(challenge),$0
+        challengeFb,uniffiCallStatus
     )
+        }
 })
 }
     
@@ -1517,8 +1591,7 @@ open func sync(request: SyncSubmitRequest)async throws   {
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_backupserviceapi_sync(
-                    self.uniffiCloneHandle(),
-                    FfiConverterTypeSyncSubmitRequest_lower(request)
+                        self.uniffiCloneHandle(),FfiConverterTypeSyncSubmitRequest_lower(request)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_void,
@@ -1542,8 +1615,7 @@ open func retrieveMetadata()async throws  -> RetrieveMetadataResponsePayload  {
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_backupserviceapi_retrieve_metadata(
-                    self.uniffiCloneHandle()
-                    
+                        self.uniffiCloneHandle()
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
@@ -1566,9 +1638,8 @@ fileprivate struct UniffiCallbackInterfaceBackupServiceApi {
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
     //
-    // This creates 1-element array, since this seems to be the only way to construct a const
-    // pointer that we can pass to the Rust code.
-    static let vtable: [UniffiVTableCallbackInterfaceBackupServiceApi] = [UniffiVTableCallbackInterfaceBackupServiceApi(
+    // Store the vtable directly.
+    static let vtable: UniffiVTableCallbackInterfaceBackupServiceApi = UniffiVTableCallbackInterfaceBackupServiceApi(
         uniffiFree: { (uniffiHandle: UInt64) -> () in
             do {
                 try FfiConverterTypeBackupServiceApi.handleMap.remove(handle: uniffiHandle)
@@ -1665,11 +1736,23 @@ fileprivate struct UniffiCallbackInterfaceBackupServiceApi {
                 droppedCallback: uniffiOutDroppedCallback
             )
         }
-    )]
+    )
+
+    // Rust stores this pointer for future callback invocations, so it must live
+    // for the process lifetime (not just for the init function call).
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceBackupServiceApi> = {
+        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceBackupServiceApi>.allocate(capacity: 1)
+        ptr.initialize(to: vtable)
+        return UnsafePointer(ptr)
+    }()
 }
 
 private func uniffiCallbackInitBackupServiceApi() {
-    uniffi_bedrock_fn_init_callback_vtable_backupserviceapi(UniffiCallbackInterfaceBackupServiceApi.vtable)
+    uniffi_bedrock_fn_init_callback_vtable_backupserviceapi(UniffiCallbackInterfaceBackupServiceApi.vtablePtr)
 }
 
 #if swift(>=5.8)
@@ -1810,8 +1893,9 @@ open class BedrockAddress: BedrockAddressProtocol, @unchecked Sendable {
 public convenience init(address: String)throws  {
     let handle =
         try rustCallWithError(FfiConverterTypePrimitiveError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_constructor_bedrockaddress_new(
-        FfiConverterString.lower(address),$0
+        FfiConverterString.lower(address),uniffiCallStatus
     )
 }
     self.init(unsafeFromHandle: handle)
@@ -1834,8 +1918,9 @@ public convenience init(address: String)throws  {
      */
 open func asAbiEncode() -> Data  {
     return try!  FfiConverterData.lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_bedrockaddress_as_abi_encode(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -1845,8 +1930,9 @@ open func asAbiEncode() -> Data  {
      */
 open func asAbiEncodePacked() -> Data  {
     return try!  FfiConverterData.lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_bedrockaddress_as_abi_encode_packed(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -1858,9 +1944,10 @@ open func asAbiEncodePacked() -> Data  {
      */
 open func asChecksummedStr(chainId: UInt64?) -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_bedrockaddress_as_checksummed_str(
             self.uniffiCloneHandle(),
-        FfiConverterOptionUInt64.lower(chainId),$0
+        FfiConverterOptionUInt64.lower(chainId),uniffiCallStatus
     )
 })
 }
@@ -1990,9 +2077,10 @@ open class BedrockConfig: BedrockConfigProtocol, @unchecked Sendable {
 public convenience init(environment: BedrockEnvironment, os: Os) {
     let handle =
         try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_constructor_bedrockconfig_new(
         FfiConverterTypeBedrockEnvironment_lower(environment),
-        FfiConverterTypeOs_lower(os),$0
+        FfiConverterTypeOs_lower(os),uniffiCallStatus
     )
 }
     self.init(unsafeFromHandle: handle)
@@ -2015,8 +2103,9 @@ public convenience init(environment: BedrockEnvironment, os: Os) {
      */
 open func environment() -> BedrockEnvironment  {
     return try!  FfiConverterTypeBedrockEnvironment_lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_bedrockconfig_environment(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -2026,8 +2115,9 @@ open func environment() -> BedrockEnvironment  {
      */
 open func os() -> Os  {
     return try!  FfiConverterTypeOs_lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_bedrockconfig_os(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -2201,9 +2291,10 @@ open class DeviceKeyValueStoreImpl: DeviceKeyValueStore, @unchecked Sendable {
      */
 open func get(key: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeKeyValueStoreError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_devicekeyvaluestore_get(
             self.uniffiCloneHandle(),
-        FfiConverterString.lower(key),$0
+        FfiConverterString.lower(key),uniffiCallStatus
     )
 })
 }
@@ -2215,10 +2306,11 @@ open func get(key: String)throws  -> String  {
      * - `KeyValueStoreError::UpdateFailure` if something goes wrong while updating the value
      */
 open func set(key: String, value: String)throws   {try rustCallWithError(FfiConverterTypeKeyValueStoreError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_devicekeyvaluestore_set(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(key),
-        FfiConverterString.lower(value),$0
+        FfiConverterString.lower(value),uniffiCallStatus
     )
 }
 }
@@ -2231,9 +2323,10 @@ open func set(key: String, value: String)throws   {try rustCallWithError(FfiConv
      * - `KeyValueStoreError::UpdateFailure` if something goes wrong while updating the value
      */
 open func delete(key: String)throws   {try rustCallWithError(FfiConverterTypeKeyValueStoreError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_devicekeyvaluestore_delete(
             self.uniffiCloneHandle(),
-        FfiConverterString.lower(key),$0
+        FfiConverterString.lower(key),uniffiCallStatus
     )
 }
 }
@@ -2250,9 +2343,8 @@ fileprivate struct UniffiCallbackInterfaceDeviceKeyValueStore {
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
     //
-    // This creates 1-element array, since this seems to be the only way to construct a const
-    // pointer that we can pass to the Rust code.
-    static let vtable: [UniffiVTableCallbackInterfaceDeviceKeyValueStore] = [UniffiVTableCallbackInterfaceDeviceKeyValueStore(
+    // Store the vtable directly.
+    static let vtable: UniffiVTableCallbackInterfaceDeviceKeyValueStore = UniffiVTableCallbackInterfaceDeviceKeyValueStore(
         uniffiFree: { (uniffiHandle: UInt64) -> () in
             do {
                 try FfiConverterTypeDeviceKeyValueStore.handleMap.remove(handle: uniffiHandle)
@@ -2344,11 +2436,23 @@ fileprivate struct UniffiCallbackInterfaceDeviceKeyValueStore {
                 lowerError: FfiConverterTypeKeyValueStoreError_lower
             )
         }
-    )]
+    )
+
+    // Rust stores this pointer for future callback invocations, so it must live
+    // for the process lifetime (not just for the init function call).
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceDeviceKeyValueStore> = {
+        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceDeviceKeyValueStore>.allocate(capacity: 1)
+        ptr.initialize(to: vtable)
+        return UnsafePointer(ptr)
+    }()
 }
 
 private func uniffiCallbackInitDeviceKeyValueStore() {
-    uniffi_bedrock_fn_init_callback_vtable_devicekeyvaluestore(UniffiCallbackInterfaceDeviceKeyValueStore.vtable)
+    uniffi_bedrock_fn_init_callback_vtable_devicekeyvaluestore(UniffiCallbackInterfaceDeviceKeyValueStore.vtablePtr)
 }
 
 #if swift(>=5.8)
@@ -2503,10 +2607,11 @@ open class Eip191Signer: Eip191SignerProtocol, @unchecked Sendable {
      */
 open func signEip191(message: Data, chainId: UInt32)throws  -> HexEncodedData  {
     return try  FfiConverterTypeHexEncodedData_lift(try rustCallWithError(FfiConverterTypeSafeSmartAccountError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_eip191signer_sign_eip_191(
             self.uniffiCloneHandle(),
         FfiConverterData.lower(message),
-        FfiConverterUInt32.lower(chainId),$0
+        FfiConverterUInt32.lower(chainId),uniffiCallStatus
     )
 })
 }
@@ -2671,7 +2776,8 @@ open class EnclaveAttestationVerifier: EnclaveAttestationVerifierProtocol, @unch
 public convenience init() {
     let handle =
         try! rustCall() {
-    uniffi_bedrock_fn_constructor_enclaveattestationverifier_new($0
+        uniffiCallStatus in
+    uniffi_bedrock_fn_constructor_enclaveattestationverifier_new(uniffiCallStatus
     )
 }
     self.init(unsafeFromHandle: handle)
@@ -2709,11 +2815,14 @@ public convenience init() {
      */
 open func verifyAttestationDocumentAndEncrypt(attestationDocBase64: String, plaintext: Data)throws  -> VerifiedAttestationWithCiphertext  {
     return try  FfiConverterTypeVerifiedAttestationWithCiphertext_lift(try rustCallWithError(FfiConverterTypeEnclaveAttestationError_lift) {
+        uniffiCallStatus in
+        FfiConverterByRefBytes.lower(plaintext) { plaintextFb in
     uniffi_bedrock_fn_method_enclaveattestationverifier_verify_attestation_document_and_encrypt(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(attestationDocBase64),
-        FfiConverterData.lower(plaintext),$0
+        plaintextFb,uniffiCallStatus
     )
+        }
 })
 }
     
@@ -2733,9 +2842,10 @@ open func verifyAttestationDocumentAndEncrypt(attestationDocBase64: String, plai
      */
 open func verifyAttestationDocumentBase64(attestationDocBase64: String)throws  -> VerifiedAttestation  {
     return try  FfiConverterTypeVerifiedAttestation_lift(try rustCallWithError(FfiConverterTypeEnclaveAttestationError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_enclaveattestationverifier_verify_attestation_document_base64(
             self.uniffiCloneHandle(),
-        FfiConverterString.lower(attestationDocBase64),$0
+        FfiConverterString.lower(attestationDocBase64),uniffiCallStatus
     )
 })
 }
@@ -2857,8 +2967,9 @@ open class EoaSigner: EoaSignerProtocol, @unchecked Sendable {
 public convenience init(privateKey: String)throws  {
     let handle =
         try rustCallWithError(FfiConverterTypeSafeSmartAccountError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_constructor_eoasigner_new(
-        FfiConverterString.lower(privateKey),$0
+        FfiConverterString.lower(privateKey),uniffiCallStatus
     )
 }
     self.init(unsafeFromHandle: handle)
@@ -2881,8 +2992,9 @@ public convenience init(privateKey: String)throws  {
      */
 open func address() -> BedrockAddress  {
     return try!  FfiConverterTypeBedrockAddress_lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_eoasigner_address(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -2892,8 +3004,9 @@ open func address() -> BedrockAddress  {
      */
 open func asEip191Signer() -> Eip191Signer  {
     return try!  FfiConverterTypeEip191Signer_lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_eoasigner_as_eip191_signer(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -3075,9 +3188,10 @@ open class FileSystemImpl: FileSystem, @unchecked Sendable {
      */
 open func fileExists(filePath: String)throws  -> Bool  {
     return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_filesystem_file_exists(
             self.uniffiCloneHandle(),
-        FfiConverterString.lower(filePath),$0
+        FfiConverterString.lower(filePath),uniffiCallStatus
     )
 })
 }
@@ -3091,9 +3205,10 @@ open func fileExists(filePath: String)throws  -> Bool  {
      */
 open func readFile(filePath: String)throws  -> Data  {
     return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_filesystem_read_file(
             self.uniffiCloneHandle(),
-        FfiConverterString.lower(filePath),$0
+        FfiConverterString.lower(filePath),uniffiCallStatus
     )
 })
 }
@@ -3109,9 +3224,10 @@ open func readFile(filePath: String)throws  -> Data  {
      */
 open func listFilesAtDirectory(folderPath: String)throws  -> [String]  {
     return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_filesystem_list_files_at_directory(
             self.uniffiCloneHandle(),
-        FfiConverterString.lower(folderPath),$0
+        FfiConverterString.lower(folderPath),uniffiCallStatus
     )
 })
 }
@@ -3128,11 +3244,12 @@ open func listFilesAtDirectory(folderPath: String)throws  -> [String]  {
      */
 open func readFileRange(filePath: String, offset: UInt64, maxLength: UInt64)throws  -> Data  {
     return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_filesystem_read_file_range(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(filePath),
         FfiConverterUInt64.lower(offset),
-        FfiConverterUInt64.lower(maxLength),$0
+        FfiConverterUInt64.lower(maxLength),uniffiCallStatus
     )
 })
 }
@@ -3144,10 +3261,11 @@ open func readFileRange(filePath: String, offset: UInt64, maxLength: UInt64)thro
      * - `FileSystemError::IoFailure` if the file cannot be written, with details about the failure
      */
 open func writeFile(filePath: String, fileBuffer: Data)throws   {try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_filesystem_write_file(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(filePath),
-        FfiConverterData.lower(fileBuffer),$0
+        FfiConverterData.lower(fileBuffer),uniffiCallStatus
     )
 }
 }
@@ -3160,9 +3278,10 @@ open func writeFile(filePath: String, fileBuffer: Data)throws   {try rustCallWit
      * - `FileSystemError::IoFailure` if the file cannot be deleted
      */
 open func deleteFile(filePath: String)throws   {try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_filesystem_delete_file(
             self.uniffiCloneHandle(),
-        FfiConverterString.lower(filePath),$0
+        FfiConverterString.lower(filePath),uniffiCallStatus
     )
 }
 }
@@ -3179,9 +3298,8 @@ fileprivate struct UniffiCallbackInterfaceFileSystem {
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
     //
-    // This creates 1-element array, since this seems to be the only way to construct a const
-    // pointer that we can pass to the Rust code.
-    static let vtable: [UniffiVTableCallbackInterfaceFileSystem] = [UniffiVTableCallbackInterfaceFileSystem(
+    // Store the vtable directly.
+    static let vtable: UniffiVTableCallbackInterfaceFileSystem = UniffiVTableCallbackInterfaceFileSystem(
         uniffiFree: { (uniffiHandle: UInt64) -> () in
             do {
                 try FfiConverterTypeFileSystem.handleMap.remove(handle: uniffiHandle)
@@ -3352,11 +3470,23 @@ fileprivate struct UniffiCallbackInterfaceFileSystem {
                 lowerError: FfiConverterTypeFileSystemError_lower
             )
         }
-    )]
+    )
+
+    // Rust stores this pointer for future callback invocations, so it must live
+    // for the process lifetime (not just for the init function call).
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceFileSystem> = {
+        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceFileSystem>.allocate(capacity: 1)
+        ptr.initialize(to: vtable)
+        return UnsafePointer(ptr)
+    }()
 }
 
 private func uniffiCallbackInitFileSystem() {
-    uniffi_bedrock_fn_init_callback_vtable_filesystem(UniffiCallbackInterfaceFileSystem.vtable)
+    uniffi_bedrock_fn_init_callback_vtable_filesystem(UniffiCallbackInterfaceFileSystem.vtablePtr)
 }
 
 #if swift(>=5.8)
@@ -3513,7 +3643,8 @@ open class FileSystemTester: FileSystemTesterProtocol, @unchecked Sendable {
 public convenience init() {
     let handle =
         try! rustCall() {
-    uniffi_bedrock_fn_constructor_filesystemtester_new($0
+        uniffiCallStatus in
+    uniffi_bedrock_fn_constructor_filesystemtester_new(uniffiCallStatus
     )
 }
     self.init(unsafeFromHandle: handle)
@@ -3538,9 +3669,10 @@ public convenience init() {
      * - `FileSystemError` if filesystem operations fail
      */
 open func testDeleteFile(filename: String)throws   {try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_filesystemtester_test_delete_file(
             self.uniffiCloneHandle(),
-        FfiConverterString.lower(filename),$0
+        FfiConverterString.lower(filename),uniffiCallStatus
     )
 }
 }
@@ -3553,9 +3685,10 @@ open func testDeleteFile(filename: String)throws   {try rustCallWithError(FfiCon
      */
 open func testFileExists(filename: String)throws  -> Bool  {
     return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_filesystemtester_test_file_exists(
             self.uniffiCloneHandle(),
-        FfiConverterString.lower(filename),$0
+        FfiConverterString.lower(filename),uniffiCallStatus
     )
 })
 }
@@ -3568,8 +3701,9 @@ open func testFileExists(filename: String)throws  -> Bool  {
      */
 open func testListFilesAtDirectory()throws  -> [String]  {
     return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_filesystemtester_test_list_files_at_directory(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -3582,9 +3716,10 @@ open func testListFilesAtDirectory()throws  -> [String]  {
      */
 open func testReadFile(filename: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeFileSystemTestError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_filesystemtester_test_read_file(
             self.uniffiCloneHandle(),
-        FfiConverterString.lower(filename),$0
+        FfiConverterString.lower(filename),uniffiCallStatus
     )
 })
 }
@@ -3596,10 +3731,11 @@ open func testReadFile(filename: String)throws  -> String  {
      * - `FileSystemTestError` if filesystem operations fail
      */
 open func testWriteFile(filename: String, content: String)throws   {try rustCallWithError(FfiConverterTypeFileSystemTestError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_filesystemtester_test_write_file(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(filename),
-        FfiConverterString.lower(content),$0
+        FfiConverterString.lower(content),uniffiCallStatus
     )
 }
 }
@@ -3746,8 +3882,9 @@ open class HexEncodedData: HexEncodedDataProtocol, @unchecked Sendable {
 public convenience init(s: String)throws  {
     let handle =
         try rustCallWithError(FfiConverterTypePrimitiveError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_constructor_hexencodeddata_new(
-        FfiConverterString.lower(s),$0
+        FfiConverterString.lower(s),uniffiCallStatus
     )
 }
     self.init(unsafeFromHandle: handle)
@@ -3770,8 +3907,9 @@ public convenience init(s: String)throws  {
      */
 open func toHexString() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_hexencodeddata_to_hex_string(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -3785,8 +3923,9 @@ open func toHexString() -> String  {
      */
 open func toVec()throws  -> Data  {
     return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypePrimitiveError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_hexencodeddata_to_vec(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -3909,7 +4048,8 @@ open class HttpClientTester: HttpClientTesterProtocol, @unchecked Sendable {
 public convenience init() {
     let handle =
         try! rustCall() {
-    uniffi_bedrock_fn_constructor_httpclienttester_new($0
+        uniffiCallStatus in
+    uniffi_bedrock_fn_constructor_httpclienttester_new(uniffiCallStatus
     )
 }
     self.init(unsafeFromHandle: handle)
@@ -3944,8 +4084,7 @@ open func fetchBadStatusCode(url: String, method: HttpMethod, headers: [HttpHead
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_httpclienttester_fetch_bad_status_code(
-                    self.uniffiCloneHandle(),
-                    FfiConverterString.lower(url),FfiConverterTypeHttpMethod_lower(method),FfiConverterSequenceTypeHttpHeader.lower(headers),FfiConverterOptionData.lower(body)
+                        self.uniffiCloneHandle(),FfiConverterString.lower(url),FfiConverterTypeHttpMethod_lower(method),FfiConverterSequenceTypeHttpHeader.lower(headers),FfiConverterOptionData.lower(body)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_u64,
@@ -4120,8 +4259,9 @@ open class KeypairSignerImpl: KeypairSigner, @unchecked Sendable {
      */
 open func publicKey()throws  -> Data  {
     return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeKeypairSignerError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_keypairsigner_public_key(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -4134,9 +4274,10 @@ open func publicKey()throws  -> Data  {
      */
 open func signDigest(digest: Data)throws  -> Data  {
     return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeKeypairSignerError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_keypairsigner_sign_digest(
             self.uniffiCloneHandle(),
-        FfiConverterData.lower(digest),$0
+        FfiConverterData.lower(digest),uniffiCallStatus
     )
 })
 }
@@ -4153,9 +4294,8 @@ fileprivate struct UniffiCallbackInterfaceKeypairSigner {
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
     //
-    // This creates 1-element array, since this seems to be the only way to construct a const
-    // pointer that we can pass to the Rust code.
-    static let vtable: [UniffiVTableCallbackInterfaceKeypairSigner] = [UniffiVTableCallbackInterfaceKeypairSigner(
+    // Store the vtable directly.
+    static let vtable: UniffiVTableCallbackInterfaceKeypairSigner = UniffiVTableCallbackInterfaceKeypairSigner(
         uniffiFree: { (uniffiHandle: UInt64) -> () in
             do {
                 try FfiConverterTypeKeypairSigner.handleMap.remove(handle: uniffiHandle)
@@ -4218,11 +4358,23 @@ fileprivate struct UniffiCallbackInterfaceKeypairSigner {
                 lowerError: FfiConverterTypeKeypairSignerError_lower
             )
         }
-    )]
+    )
+
+    // Rust stores this pointer for future callback invocations, so it must live
+    // for the process lifetime (not just for the init function call).
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceKeypairSigner> = {
+        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceKeypairSigner>.allocate(capacity: 1)
+        ptr.initialize(to: vtable)
+        return UnsafePointer(ptr)
+    }()
 }
 
 private func uniffiCallbackInitKeypairSigner() {
-    uniffi_bedrock_fn_init_callback_vtable_keypairsigner(UniffiCallbackInterfaceKeypairSigner.vtable)
+    uniffi_bedrock_fn_init_callback_vtable_keypairsigner(UniffiCallbackInterfaceKeypairSigner.vtablePtr)
 }
 
 #if swift(>=5.8)
@@ -4480,10 +4632,11 @@ open class LoggerImpl: Logger, @unchecked Sendable {
      * * `message` - The log message to be recorded.
      */
 open func log(level: LogLevel, message: String)  {try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_logger_log(
             self.uniffiCloneHandle(),
         FfiConverterTypeLogLevel_lower(level),
-        FfiConverterString.lower(message),$0
+        FfiConverterString.lower(message),uniffiCallStatus
     )
 }
 }
@@ -4500,9 +4653,8 @@ fileprivate struct UniffiCallbackInterfaceLogger {
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
     //
-    // This creates 1-element array, since this seems to be the only way to construct a const
-    // pointer that we can pass to the Rust code.
-    static let vtable: [UniffiVTableCallbackInterfaceLogger] = [UniffiVTableCallbackInterfaceLogger(
+    // Store the vtable directly.
+    static let vtable: UniffiVTableCallbackInterfaceLogger = UniffiVTableCallbackInterfaceLogger(
         uniffiFree: { (uniffiHandle: UInt64) -> () in
             do {
                 try FfiConverterTypeLogger.handleMap.remove(handle: uniffiHandle)
@@ -4543,11 +4695,23 @@ fileprivate struct UniffiCallbackInterfaceLogger {
                 writeReturn: writeReturn
             )
         }
-    )]
+    )
+
+    // Rust stores this pointer for future callback invocations, so it must live
+    // for the process lifetime (not just for the init function call).
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceLogger> = {
+        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceLogger>.allocate(capacity: 1)
+        ptr.initialize(to: vtable)
+        return UnsafePointer(ptr)
+    }()
 }
 
 private func uniffiCallbackInitLogger() {
-    uniffi_bedrock_fn_init_callback_vtable_logger(UniffiCallbackInterfaceLogger.vtable)
+    uniffi_bedrock_fn_init_callback_vtable_logger(UniffiCallbackInterfaceLogger.vtablePtr)
 }
 
 #if swift(>=5.8)
@@ -4706,7 +4870,8 @@ open class ManifestManager: ManifestManagerProtocol, @unchecked Sendable {
 public convenience init() {
     let handle =
         try! rustCall() {
-    uniffi_bedrock_fn_constructor_manifestmanager_new($0
+        uniffiCallStatus in
+    uniffi_bedrock_fn_constructor_manifestmanager_new(uniffiCallStatus
     )
 }
     self.init(unsafeFromHandle: handle)
@@ -4737,8 +4902,7 @@ open func listFiles(designator: BackupFileDesignator)async throws  -> [String]  
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_manifestmanager_list_files(
-                    self.uniffiCloneHandle(),
-                    FfiConverterTypeBackupFileDesignator_lower(designator)
+                        self.uniffiCloneHandle(),FfiConverterTypeBackupFileDesignator_lower(designator)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
@@ -4762,8 +4926,7 @@ open func removeFile(filePath: String, rootSecret: String, backupKeypairPublicKe
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_manifestmanager_remove_file(
-                    self.uniffiCloneHandle(),
-                    FfiConverterString.lower(filePath),FfiConverterString.lower(rootSecret),FfiConverterString.lower(backupKeypairPublicKey)
+                        self.uniffiCloneHandle(),FfiConverterString.lower(filePath),FfiConverterString.lower(rootSecret),FfiConverterString.lower(backupKeypairPublicKey)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_void,
@@ -4786,8 +4949,7 @@ open func replaceAllFilesForDesignator(designator: BackupFileDesignator, newFile
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_manifestmanager_replace_all_files_for_designator(
-                    self.uniffiCloneHandle(),
-                    FfiConverterTypeBackupFileDesignator_lower(designator),FfiConverterString.lower(newFilePath),FfiConverterString.lower(rootSecret),FfiConverterString.lower(backupKeypairPublicKey)
+                        self.uniffiCloneHandle(),FfiConverterTypeBackupFileDesignator_lower(designator),FfiConverterString.lower(newFilePath),FfiConverterString.lower(rootSecret),FfiConverterString.lower(backupKeypairPublicKey)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_void,
@@ -4810,8 +4972,7 @@ open func storeFile(designator: BackupFileDesignator, filePath: String, rootSecr
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_manifestmanager_store_file(
-                    self.uniffiCloneHandle(),
-                    FfiConverterTypeBackupFileDesignator_lower(designator),FfiConverterString.lower(filePath),FfiConverterString.lower(rootSecret),FfiConverterString.lower(backupKeypairPublicKey)
+                        self.uniffiCloneHandle(),FfiConverterTypeBackupFileDesignator_lower(designator),FfiConverterString.lower(filePath),FfiConverterString.lower(rootSecret),FfiConverterString.lower(backupKeypairPublicKey)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_void,
@@ -5029,10 +5190,11 @@ open class MigrationController: MigrationControllerProtocol, @unchecked Sendable
 public convenience init(kvStore: DeviceKeyValueStore, safeAccount: SafeSmartAccount?, additionalProcessors: [MigrationProcessor]) {
     let handle =
         try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_constructor_migrationcontroller_new(
         FfiConverterTypeDeviceKeyValueStore_lower(kvStore),
         FfiConverterOptionTypeSafeSmartAccount.lower(safeAccount),
-        FfiConverterSequenceTypeMigrationProcessor.lower(additionalProcessors),$0
+        FfiConverterSequenceTypeMigrationProcessor.lower(additionalProcessors),uniffiCallStatus
     )
 }
     self.init(unsafeFromHandle: handle)
@@ -5070,8 +5232,9 @@ public convenience init(kvStore: DeviceKeyValueStore, safeAccount: SafeSmartAcco
      */
 open func deleteAllRecords()throws  -> Int32  {
     return try  FfiConverterInt32.lift(try rustCallWithError(FfiConverterTypeMigrationError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_migrationcontroller_delete_all_records(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -5097,8 +5260,9 @@ open func deleteAllRecords()throws  -> Int32  {
      */
 open func listAllRecords()throws  -> [MigrationRecordEntry]  {
     return try  FfiConverterSequenceTypeMigrationRecordEntry.lift(try rustCallWithError(FfiConverterTypeMigrationError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_migrationcontroller_list_all_records(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -5129,8 +5293,7 @@ open func runMigrations()async throws  -> MigrationRunSummary  {
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_migrationcontroller_run_migrations(
-                    self.uniffiCloneHandle()
-                    
+                        self.uniffiCloneHandle()
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
@@ -5314,8 +5477,9 @@ open class MigrationProcessorImpl: MigrationProcessor, @unchecked Sendable {
      */
 open func migrationId() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_migrationprocessor_migration_id(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -5337,8 +5501,7 @@ open func isApplicable()async throws  -> Bool  {
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_migrationprocessor_is_applicable(
-                    self.uniffiCloneHandle()
-                    
+                        self.uniffiCloneHandle()
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_i8,
@@ -5357,8 +5520,7 @@ open func execute()async throws  -> ProcessorResult  {
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_migrationprocessor_execute(
-                    self.uniffiCloneHandle()
-                    
+                        self.uniffiCloneHandle()
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
@@ -5381,9 +5543,8 @@ fileprivate struct UniffiCallbackInterfaceMigrationProcessor {
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
     //
-    // This creates 1-element array, since this seems to be the only way to construct a const
-    // pointer that we can pass to the Rust code.
-    static let vtable: [UniffiVTableCallbackInterfaceMigrationProcessor] = [UniffiVTableCallbackInterfaceMigrationProcessor(
+    // Store the vtable directly.
+    static let vtable: UniffiVTableCallbackInterfaceMigrationProcessor = UniffiVTableCallbackInterfaceMigrationProcessor(
         uniffiFree: { (uniffiHandle: UInt64) -> () in
             do {
                 try FfiConverterTypeMigrationProcessor.handleMap.remove(handle: uniffiHandle)
@@ -5502,11 +5663,23 @@ fileprivate struct UniffiCallbackInterfaceMigrationProcessor {
                 droppedCallback: uniffiOutDroppedCallback
             )
         }
-    )]
+    )
+
+    // Rust stores this pointer for future callback invocations, so it must live
+    // for the process lifetime (not just for the init function call).
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceMigrationProcessor> = {
+        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceMigrationProcessor>.allocate(capacity: 1)
+        ptr.initialize(to: vtable)
+        return UnsafePointer(ptr)
+    }()
 }
 
 private func uniffiCallbackInitMigrationProcessor() {
-    uniffi_bedrock_fn_init_callback_vtable_migrationprocessor(UniffiCallbackInterfaceMigrationProcessor.vtable)
+    uniffi_bedrock_fn_init_callback_vtable_migrationprocessor(UniffiCallbackInterfaceMigrationProcessor.vtablePtr)
 }
 
 #if swift(>=5.8)
@@ -5641,8 +5814,9 @@ open class NtpImpl: Ntp, @unchecked Sendable {
      */
 open func nowMillis() -> Int64  {
     return try!  FfiConverterInt64.lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_ntp_now_millis(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -5659,9 +5833,8 @@ fileprivate struct UniffiCallbackInterfaceNtp {
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
     //
-    // This creates 1-element array, since this seems to be the only way to construct a const
-    // pointer that we can pass to the Rust code.
-    static let vtable: [UniffiVTableCallbackInterfaceNtp] = [UniffiVTableCallbackInterfaceNtp(
+    // Store the vtable directly.
+    static let vtable: UniffiVTableCallbackInterfaceNtp = UniffiVTableCallbackInterfaceNtp(
         uniffiFree: { (uniffiHandle: UInt64) -> () in
             do {
                 try FfiConverterTypeNtp.handleMap.remove(handle: uniffiHandle)
@@ -5698,11 +5871,23 @@ fileprivate struct UniffiCallbackInterfaceNtp {
                 writeReturn: writeReturn
             )
         }
-    )]
+    )
+
+    // Rust stores this pointer for future callback invocations, so it must live
+    // for the process lifetime (not just for the init function call).
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceNtp> = {
+        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceNtp>.allocate(capacity: 1)
+        ptr.initialize(to: vtable)
+        return UnsafePointer(ptr)
+    }()
 }
 
 private func uniffiCallbackInitNtp() {
-    uniffi_bedrock_fn_init_callback_vtable_ntp(UniffiCallbackInterfaceNtp.vtable)
+    uniffi_bedrock_fn_init_callback_vtable_ntp(UniffiCallbackInterfaceNtp.vtablePtr)
 }
 
 #if swift(>=5.8)
@@ -5847,8 +6032,9 @@ open class P256Signer: P256SignerProtocol, @unchecked Sendable {
      */
 public static func verify(signer: KeypairSigner)throws  -> P256Signer  {
     return try  FfiConverterTypeP256Signer_lift(try rustCallWithError(FfiConverterTypeKeypairSignerError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_constructor_p256signer_verify(
-        FfiConverterTypeKeypairSigner_lower(signer),$0
+        FfiConverterTypeKeypairSigner_lower(signer),uniffiCallStatus
     )
 })
 }
@@ -5984,8 +6170,9 @@ open class RootKey: RootKeyProtocol, @unchecked Sendable {
      */
 public static func fromJson(jsonStr: String)throws  -> RootKey  {
     return try  FfiConverterTypeRootKey_lift(try rustCallWithError(FfiConverterTypeRootKeyError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_constructor_rootkey_from_json(
-        FfiConverterString.lower(jsonStr),$0
+        FfiConverterString.lower(jsonStr),uniffiCallStatus
     )
 })
 }
@@ -5995,9 +6182,12 @@ public static func fromJson(jsonStr: String)throws  -> RootKey  {
      */
 public static func fromSlice(jsonBytes: Data)throws  -> RootKey  {
     return try  FfiConverterTypeRootKey_lift(try rustCallWithError(FfiConverterTypeRootKeyError_lift) {
+        uniffiCallStatus in
+        FfiConverterByRefBytes.lower(jsonBytes) { jsonBytesFb in
     uniffi_bedrock_fn_constructor_rootkey_from_slice(
-        FfiConverterData.lower(jsonBytes),$0
+        jsonBytesFb,uniffiCallStatus
     )
+        }
 })
 }
     
@@ -6009,7 +6199,8 @@ public static func fromSlice(jsonBytes: Data)throws  -> RootKey  {
      */
 public static func newRandom() -> RootKey  {
     return try!  FfiConverterTypeRootKey_lift(try! rustCall() {
-    uniffi_bedrock_fn_constructor_rootkey_new_random($0
+        uniffiCallStatus in
+    uniffi_bedrock_fn_constructor_rootkey_new_random(uniffiCallStatus
     )
 })
 }
@@ -6021,9 +6212,10 @@ public static func newRandom() -> RootKey  {
      */
 open func isEqualTo(other: RootKey) -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_rootkey_is_equal_to(
             self.uniffiCloneHandle(),
-        FfiConverterTypeRootKey_lower(other),$0
+        FfiConverterTypeRootKey_lower(other),uniffiCallStatus
     )
 })
 }
@@ -6033,8 +6225,9 @@ open func isEqualTo(other: RootKey) -> Bool  {
      */
 open func isV0() -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_rootkey_is_v0(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -6158,8 +6351,9 @@ open class Safe4337ModuleProcessor: Safe4337ModuleProcessorProtocol, @unchecked 
 public convenience init(safeAccount: SafeSmartAccount) {
     let handle =
         try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_constructor_safe4337moduleprocessor_new(
-        FfiConverterTypeSafeSmartAccount_lower(safeAccount),$0
+        FfiConverterTypeSafeSmartAccount_lower(safeAccount),uniffiCallStatus
     )
 }
     self.init(unsafeFromHandle: handle)
@@ -6185,8 +6379,9 @@ public convenience init(safeAccount: SafeSmartAccount) {
      */
 open func asMigrationProcessor() -> MigrationProcessor  {
     return try!  FfiConverterTypeMigrationProcessor_lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_safe4337moduleprocessor_as_migration_processor(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -6669,9 +6864,10 @@ open class SafeSmartAccount: SafeSmartAccountProtocol, @unchecked Sendable {
 public convenience init(keyManager: SmartAccountKeyManager, walletAddress: String)throws  {
     let handle =
         try rustCallWithError(FfiConverterTypeSafeSmartAccountError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_constructor_safesmartaccount_new(
         FfiConverterTypeSmartAccountKeyManager_lower(keyManager),
-        FfiConverterString.lower(walletAddress),$0
+        FfiConverterString.lower(walletAddress),uniffiCallStatus
     )
 }
     self.init(unsafeFromHandle: handle)
@@ -6702,10 +6898,11 @@ public convenience init(keyManager: SmartAccountKeyManager, walletAddress: Strin
      */
 open func personalSign(chainId: UInt32, message: String)throws  -> HexEncodedData  {
     return try  FfiConverterTypeHexEncodedData_lift(try rustCallWithError(FfiConverterTypeSafeSmartAccountError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_safesmartaccount_personal_sign(
             self.uniffiCloneHandle(),
         FfiConverterUInt32.lower(chainId),
-        FfiConverterString.lower(message),$0
+        FfiConverterString.lower(message),uniffiCallStatus
     )
 })
 }
@@ -6765,10 +6962,11 @@ open func personalSign(chainId: UInt32, message: String)throws  -> HexEncodedDat
      */
 open func sign4337Op(chainId: UInt32, userOperation: UnparsedUserOperation)throws  -> HexEncodedData  {
     return try  FfiConverterTypeHexEncodedData_lift(try rustCallWithError(FfiConverterTypeSafeSmartAccountError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_safesmartaccount_sign_4337_op(
             self.uniffiCloneHandle(),
         FfiConverterUInt32.lower(chainId),
-        FfiConverterTypeUnparsedUserOperation_lower(userOperation),$0
+        FfiConverterTypeUnparsedUserOperation_lower(userOperation),uniffiCallStatus
     )
 })
 }
@@ -6788,10 +6986,11 @@ open func sign4337Op(chainId: UInt32, userOperation: UnparsedUserOperation)throw
      */
 open func signPermit2Transfer(chainId: UInt32, transfer: UnparsedPermitTransferFrom)throws  -> HexEncodedData  {
     return try  FfiConverterTypeHexEncodedData_lift(try rustCallWithError(FfiConverterTypeSafeSmartAccountError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_safesmartaccount_sign_permit2_transfer(
             self.uniffiCloneHandle(),
         FfiConverterUInt32.lower(chainId),
-        FfiConverterTypeUnparsedPermitTransferFrom_lower(transfer),$0
+        FfiConverterTypeUnparsedPermitTransferFrom_lower(transfer),uniffiCallStatus
     )
 })
 }
@@ -6811,10 +7010,11 @@ open func signPermit2Transfer(chainId: UInt32, transfer: UnparsedPermitTransferF
      */
 open func signTransaction(chainId: UInt32, transaction: SafeTransaction)throws  -> HexEncodedData  {
     return try  FfiConverterTypeHexEncodedData_lift(try rustCallWithError(FfiConverterTypeSafeSmartAccountError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_safesmartaccount_sign_transaction(
             self.uniffiCloneHandle(),
         FfiConverterUInt32.lower(chainId),
-        FfiConverterTypeSafeTransaction_lower(transaction),$0
+        FfiConverterTypeSafeTransaction_lower(transaction),uniffiCallStatus
     )
 })
 }
@@ -6836,10 +7036,11 @@ open func signTransaction(chainId: UInt32, transaction: SafeTransaction)throws  
      */
 open func signTypedData(chainId: UInt32, stringifiedTypedData: String)throws  -> HexEncodedData  {
     return try  FfiConverterTypeHexEncodedData_lift(try rustCallWithError(FfiConverterTypeSafeSmartAccountError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_safesmartaccount_sign_typed_data(
             self.uniffiCloneHandle(),
         FfiConverterUInt32.lower(chainId),
-        FfiConverterString.lower(stringifiedTypedData),$0
+        FfiConverterString.lower(stringifiedTypedData),uniffiCallStatus
     )
 })
 }
@@ -6849,8 +7050,9 @@ open func signTypedData(chainId: UInt32, stringifiedTypedData: String)throws  ->
      */
 open func asEip191Signer() -> Eip191Signer  {
     return try!  FfiConverterTypeEip191Signer_lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_safesmartaccount_as_eip191_signer(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -6874,8 +7076,7 @@ open func transactionErc4626Deposit(vaultAddress: String, assetAmount: String)as
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_safesmartaccount_transaction_erc4626_deposit(
-                    self.uniffiCloneHandle(),
-                    FfiConverterString.lower(vaultAddress),FfiConverterString.lower(assetAmount)
+                        self.uniffiCloneHandle(),FfiConverterString.lower(vaultAddress),FfiConverterString.lower(assetAmount)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_u64,
@@ -6905,8 +7106,7 @@ open func transactionErc4626Redeem(vaultAddress: String, shareAmount: String)asy
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_safesmartaccount_transaction_erc4626_redeem(
-                    self.uniffiCloneHandle(),
-                    FfiConverterString.lower(vaultAddress),FfiConverterString.lower(shareAmount)
+                        self.uniffiCloneHandle(),FfiConverterString.lower(vaultAddress),FfiConverterString.lower(shareAmount)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_u64,
@@ -6936,8 +7136,7 @@ open func transactionErc4626Withdraw(vaultAddress: String, assetAmount: String)a
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_safesmartaccount_transaction_erc4626_withdraw(
-                    self.uniffiCloneHandle(),
-                    FfiConverterString.lower(vaultAddress),FfiConverterString.lower(assetAmount)
+                        self.uniffiCloneHandle(),FfiConverterString.lower(vaultAddress),FfiConverterString.lower(assetAmount)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_u64,
@@ -6973,8 +7172,7 @@ open func transactionPermit2Approve(tokenAddress: String, spenderAddress: String
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_safesmartaccount_transaction_permit2_approve(
-                    self.uniffiCloneHandle(),
-                    FfiConverterString.lower(tokenAddress),FfiConverterString.lower(spenderAddress),FfiConverterString.lower(amount),FfiConverterString.lower(expiration)
+                        self.uniffiCloneHandle(),FfiConverterString.lower(tokenAddress),FfiConverterString.lower(spenderAddress),FfiConverterString.lower(amount),FfiConverterString.lower(expiration)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_u64,
@@ -7031,8 +7229,7 @@ open func transactionTransfer(tokenAddress: String, toAddress: String, amount: S
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_safesmartaccount_transaction_transfer(
-                    self.uniffiCloneHandle(),
-                    FfiConverterString.lower(tokenAddress),FfiConverterString.lower(toAddress),FfiConverterString.lower(amount),FfiConverterOptionTypeTransferAssociation.lower(transferAssociation)
+                        self.uniffiCloneHandle(),FfiConverterString.lower(tokenAddress),FfiConverterString.lower(toAddress),FfiConverterString.lower(amount),FfiConverterOptionTypeTransferAssociation.lower(transferAssociation)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_u64,
@@ -7073,8 +7270,7 @@ open func transactionUsdLegacyVaultMigrate(legacyVaultAddress: String, erc4626Va
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_safesmartaccount_transaction_usd_legacy_vault_migrate(
-                    self.uniffiCloneHandle(),
-                    FfiConverterString.lower(legacyVaultAddress),FfiConverterString.lower(erc4626VaultAddress)
+                        self.uniffiCloneHandle(),FfiConverterString.lower(legacyVaultAddress),FfiConverterString.lower(erc4626VaultAddress)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_u64,
@@ -7110,8 +7306,7 @@ open func transactionWldLegacyVaultMigrate(legacyVaultAddress: String, erc4626Va
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_safesmartaccount_transaction_wld_legacy_vault_migrate(
-                    self.uniffiCloneHandle(),
-                    FfiConverterString.lower(legacyVaultAddress),FfiConverterString.lower(erc4626VaultAddress)
+                        self.uniffiCloneHandle(),FfiConverterString.lower(legacyVaultAddress),FfiConverterString.lower(erc4626VaultAddress)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_u64,
@@ -7134,8 +7329,7 @@ open func transactionWorldGiftManagerCancel(giftIdStr: String)async throws  -> W
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_safesmartaccount_transaction_world_gift_manager_cancel(
-                    self.uniffiCloneHandle(),
-                    FfiConverterString.lower(giftIdStr)
+                        self.uniffiCloneHandle(),FfiConverterString.lower(giftIdStr)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
@@ -7158,8 +7352,7 @@ open func transactionWorldGiftManagerGift(tokenAddress: String, toAddress: Strin
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_safesmartaccount_transaction_world_gift_manager_gift(
-                    self.uniffiCloneHandle(),
-                    FfiConverterString.lower(tokenAddress),FfiConverterString.lower(toAddress),FfiConverterString.lower(amount)
+                        self.uniffiCloneHandle(),FfiConverterString.lower(tokenAddress),FfiConverterString.lower(toAddress),FfiConverterString.lower(amount)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
@@ -7182,8 +7375,7 @@ open func transactionWorldGiftManagerRedeem(giftIdStr: String)async throws  -> W
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_safesmartaccount_transaction_world_gift_manager_redeem(
-                    self.uniffiCloneHandle(),
-                    FfiConverterString.lower(giftIdStr)
+                        self.uniffiCloneHandle(),FfiConverterString.lower(giftIdStr)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
@@ -7214,8 +7406,7 @@ open func waGetUserOperationReceipt(userOpHash: String)async throws  -> WaGetUse
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_safesmartaccount_wa_get_user_operation_receipt(
-                    self.uniffiCloneHandle(),
-                    FfiConverterString.lower(userOpHash)
+                        self.uniffiCloneHandle(),FfiConverterString.lower(userOpHash)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
@@ -7250,8 +7441,7 @@ open func sendBundlerSponsoredUserOperation(userOperation: UnparsedUserOperation
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_safesmartaccount_send_bundler_sponsored_user_operation(
-                    self.uniffiCloneHandle(),
-                    FfiConverterTypeUnparsedUserOperation_lower(userOperation),FfiConverterString.lower(rpcUrl)
+                        self.uniffiCloneHandle(),FfiConverterTypeUnparsedUserOperation_lower(userOperation),FfiConverterString.lower(rpcUrl)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_u64,
@@ -7430,11 +7620,12 @@ open class SiweMessage: SiweMessageProtocol, @unchecked Sendable {
      */
 public static func fromStrWithAccount(s: String, smartAccount: SafeSmartAccount, authorizedUrls: [String], queryingUrl: String)throws  -> SiweMessage  {
     return try  FfiConverterTypeSiweMessage_lift(try rustCallWithError(FfiConverterTypeSiweError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_constructor_siwemessage_from_str_with_account(
         FfiConverterString.lower(s),
         FfiConverterTypeSafeSmartAccount_lower(smartAccount),
         FfiConverterSequenceString.lower(authorizedUrls),
-        FfiConverterString.lower(queryingUrl),$0
+        FfiConverterString.lower(queryingUrl),uniffiCallStatus
     )
 })
 }
@@ -7450,10 +7641,11 @@ public static func fromStrWithAccount(s: String, smartAccount: SafeSmartAccount,
      */
 public static func fromWorldAppAuthRequest(flow: WorldAppAuthFlow, baseUrl: String, eoaSigner: EoaSigner)throws  -> SiweMessage  {
     return try  FfiConverterTypeSiweMessage_lift(try rustCallWithError(FfiConverterTypeSiweError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_constructor_siwemessage_from_world_app_auth_request(
         FfiConverterTypeWorldAppAuthFlow_lower(flow),
         FfiConverterString.lower(baseUrl),
-        FfiConverterTypeEoaSigner_lower(eoaSigner),$0
+        FfiConverterTypeEoaSigner_lower(eoaSigner),uniffiCallStatus
     )
 })
 }
@@ -7465,8 +7657,9 @@ public static func fromWorldAppAuthRequest(flow: WorldAppAuthFlow, baseUrl: Stri
      */
 open func address() -> BedrockAddress  {
     return try!  FfiConverterTypeBedrockAddress_lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_siwemessage_address(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -7476,8 +7669,9 @@ open func address() -> BedrockAddress  {
      */
 open func domain() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_siwemessage_domain(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -7490,9 +7684,10 @@ open func domain() -> String  {
      */
 open func sign(signer: Eip191Signer)throws  -> HexEncodedData  {
     return try  FfiConverterTypeHexEncodedData_lift(try rustCallWithError(FfiConverterTypeSiweError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_siwemessage_sign(
             self.uniffiCloneHandle(),
-        FfiConverterTypeEip191Signer_lower(signer),$0
+        FfiConverterTypeEip191Signer_lower(signer),uniffiCallStatus
     )
 })
 }
@@ -7502,8 +7697,9 @@ open func sign(signer: Eip191Signer)throws  -> HexEncodedData  {
      */
 open func statement() -> String?  {
     return try!  FfiConverterOptionString.lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_siwemessage_statement(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -7519,9 +7715,10 @@ open func statement() -> String?  {
      */
 open func toCacheHash(currentUrl: String)throws  -> HexEncodedData  {
     return try  FfiConverterTypeHexEncodedData_lift(try rustCallWithError(FfiConverterTypeSiweError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_siwemessage_to_cache_hash(
             self.uniffiCloneHandle(),
-        FfiConverterString.lower(currentUrl),$0
+        FfiConverterString.lower(currentUrl),uniffiCallStatus
     )
 })
 }
@@ -7531,8 +7728,9 @@ open func toCacheHash(currentUrl: String)throws  -> HexEncodedData  {
      */
 open func toMessageString() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_siwemessage_to_message_string(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -7697,8 +7895,9 @@ open class SmartAccountKeyManagerImpl: SmartAccountKeyManager, @unchecked Sendab
      */
 open func getEoaPrivateKey() -> SiegelSession  {
     return try!  FfiConverterTypeSiegelSession_lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_smartaccountkeymanager_get_eoa_private_key(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -7715,9 +7914,8 @@ fileprivate struct UniffiCallbackInterfaceSmartAccountKeyManager {
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
     //
-    // This creates 1-element array, since this seems to be the only way to construct a const
-    // pointer that we can pass to the Rust code.
-    static let vtable: [UniffiVTableCallbackInterfaceSmartAccountKeyManager] = [UniffiVTableCallbackInterfaceSmartAccountKeyManager(
+    // Store the vtable directly.
+    static let vtable: UniffiVTableCallbackInterfaceSmartAccountKeyManager = UniffiVTableCallbackInterfaceSmartAccountKeyManager(
         uniffiFree: { (uniffiHandle: UInt64) -> () in
             do {
                 try FfiConverterTypeSmartAccountKeyManager.handleMap.remove(handle: uniffiHandle)
@@ -7754,11 +7952,23 @@ fileprivate struct UniffiCallbackInterfaceSmartAccountKeyManager {
                 writeReturn: writeReturn
             )
         }
-    )]
+    )
+
+    // Rust stores this pointer for future callback invocations, so it must live
+    // for the process lifetime (not just for the init function call).
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceSmartAccountKeyManager> = {
+        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceSmartAccountKeyManager>.allocate(capacity: 1)
+        ptr.initialize(to: vtable)
+        return UnsafePointer(ptr)
+    }()
 }
 
 private func uniffiCallbackInitSmartAccountKeyManager() {
-    uniffi_bedrock_fn_init_callback_vtable_smartaccountkeymanager(UniffiCallbackInterfaceSmartAccountKeyManager.vtable)
+    uniffi_bedrock_fn_init_callback_vtable_smartaccountkeymanager(UniffiCallbackInterfaceSmartAccountKeyManager.vtablePtr)
 }
 
 #if swift(>=5.8)
@@ -7935,7 +8145,8 @@ open class ToolingDemo: ToolingDemoProtocol, @unchecked Sendable {
 public convenience init() {
     let handle =
         try! rustCall() {
-    uniffi_bedrock_fn_constructor_toolingdemo_new($0
+        uniffiCallStatus in
+    uniffi_bedrock_fn_constructor_toolingdemo_new(uniffiCallStatus
     )
 }
     self.init(unsafeFromHandle: handle)
@@ -7969,8 +8180,7 @@ open func demoAsyncOperation(delayMs: UInt64)async throws  -> String  {
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_toolingdemo_demo_async_operation(
-                    self.uniffiCloneHandle(),
-                    FfiConverterUInt64.lower(delayMs)
+                        self.uniffiCloneHandle(),FfiConverterUInt64.lower(delayMs)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
@@ -7993,10 +8203,11 @@ open func demoAsyncOperation(delayMs: UInt64)async throws  -> String  {
      */
 open func demoAuthenticate(username: String, password: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeDemoError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_toolingdemo_demo_authenticate(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(username),
-        FfiConverterString.lower(password),$0
+        FfiConverterString.lower(password),uniffiCallStatus
     )
 })
 }
@@ -8011,9 +8222,10 @@ open func demoAuthenticate(username: String, password: String)throws  -> String 
      */
 open func demoGenericOperation(input: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeDemoError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_toolingdemo_demo_generic_operation(
             self.uniffiCloneHandle(),
-        FfiConverterString.lower(input),$0
+        FfiConverterString.lower(input),uniffiCallStatus
     )
 })
 }
@@ -8028,10 +8240,11 @@ open func demoGenericOperation(input: String)throws  -> String  {
      */
 open func demoMixedOperation(operation: String, data: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeDemoError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_toolingdemo_demo_mixed_operation(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(operation),
-        FfiConverterString.lower(data),$0
+        FfiConverterString.lower(data),uniffiCallStatus
     )
 })
 }
@@ -8041,8 +8254,9 @@ open func demoMixedOperation(operation: String, data: String)throws  -> String  
      */
 open func getDemoResult() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_toolingdemo_get_demo_result(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -8051,9 +8265,10 @@ open func getDemoResult() -> String  {
      * Logs a simple message to test log prefixing.
      */
 open func logMessage(message: String)  {try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_toolingdemo_log_message(
             self.uniffiCloneHandle(),
-        FfiConverterString.lower(message),$0
+        FfiConverterString.lower(message),uniffiCallStatus
     )
 }
 }
@@ -8062,8 +8277,9 @@ open func logMessage(message: String)  {try! rustCall() {
      * Logs messages at different levels to test log prefixing.
      */
 open func testLogLevels()  {try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_toolingdemo_test_log_levels(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 }
 }
@@ -8287,7 +8503,8 @@ open class Turnkey: TurnkeyProtocol, @unchecked Sendable {
 public convenience init() {
     let handle =
         try! rustCall() {
-    uniffi_bedrock_fn_constructor_turnkey_new($0
+        uniffiCallStatus in
+    uniffi_bedrock_fn_constructor_turnkey_new(uniffiCallStatus
     )
 }
     self.init(unsafeFromHandle: handle)
@@ -8334,11 +8551,12 @@ public convenience init() {
      */
 open func decryptFactorSecret(sessionSecretKey: String, turnkeyOrganizationId: String, exportBundle: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeTurnkeyError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_turnkey_decrypt_factor_secret(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(sessionSecretKey),
         FfiConverterString.lower(turnkeyOrganizationId),
-        FfiConverterString.lower(exportBundle),$0
+        FfiConverterString.lower(exportBundle),uniffiCallStatus
     )
 })
 }
@@ -8358,9 +8576,10 @@ open func decryptFactorSecret(sessionSecretKey: String, turnkeyOrganizationId: S
      */
 open func derivePublicKey(apiPrivateKey: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeTurnkeyError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_turnkey_derive_public_key(
             self.uniffiCloneHandle(),
-        FfiConverterString.lower(apiPrivateKey),$0
+        FfiConverterString.lower(apiPrivateKey),uniffiCallStatus
     )
 })
 }
@@ -8390,12 +8609,13 @@ open func derivePublicKey(apiPrivateKey: String)throws  -> String  {
      */
 open func generateImportBundleForFactorSecret(factorSecret: String, importBundle: String, turnkeyOrganizationId: String, turnkeyUserId: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeTurnkeyError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_turnkey_generate_import_bundle_for_factor_secret(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(factorSecret),
         FfiConverterString.lower(importBundle),
         FfiConverterString.lower(turnkeyOrganizationId),
-        FfiConverterString.lower(turnkeyUserId),$0
+        FfiConverterString.lower(turnkeyUserId),uniffiCallStatus
     )
 })
 }
@@ -8426,10 +8646,11 @@ open func generateImportBundleForFactorSecret(factorSecret: String, importBundle
      */
 open func stamp(body: String, apiPrivateKey: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeTurnkeyError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_turnkey_stamp(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(body),
-        FfiConverterString.lower(apiPrivateKey),$0
+        FfiConverterString.lower(apiPrivateKey),uniffiCallStatus
     )
 })
 }
@@ -8451,10 +8672,11 @@ open func stamp(body: String, apiPrivateKey: String)throws  -> String  {
      */
 open func stampWithBackupAccountKey(rootSecret: SiegelSession, body: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeTurnkeyError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_turnkey_stamp_with_backup_account_key(
             self.uniffiCloneHandle(),
         FfiConverterTypeSiegelSession_lower(rootSecret),
-        FfiConverterString.lower(body),$0
+        FfiConverterString.lower(body),uniffiCallStatus
     )
 })
 }
@@ -8598,7 +8820,8 @@ open class TurnkeyManager: TurnkeyManagerProtocol, @unchecked Sendable {
 public convenience init() {
     let handle =
         try! rustCall() {
-    uniffi_bedrock_fn_constructor_turnkeymanager_new($0
+        uniffiCallStatus in
+    uniffi_bedrock_fn_constructor_turnkeymanager_new(uniffiCallStatus
     )
 }
     self.init(unsafeFromHandle: handle)
@@ -8648,8 +8871,7 @@ open func runMigrations(suborganizationId: String?, syncFactor: P256Signer, main
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_turnkeymanager_run_migrations(
-                    self.uniffiCloneHandle(),
-                    FfiConverterOptionString.lower(suborganizationId),FfiConverterTypeP256Signer_lower(syncFactor),FfiConverterOptionTypeP256Signer.lower(mainFactor)
+                        self.uniffiCloneHandle(),FfiConverterOptionString.lower(suborganizationId),FfiConverterTypeP256Signer_lower(syncFactor),FfiConverterOptionTypeP256Signer.lower(mainFactor)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
@@ -8782,8 +9004,9 @@ open class UserAgent: UserAgentProtocol, @unchecked Sendable {
      */
 open func headerValue() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_useragent_header_value(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -8924,7 +9147,8 @@ open class UserAgentBuilder: UserAgentBuilderProtocol, @unchecked Sendable {
 public convenience init() {
     let handle =
         try! rustCall() {
-    uniffi_bedrock_fn_constructor_useragentbuilder_new($0
+        uniffiCallStatus in
+    uniffi_bedrock_fn_constructor_useragentbuilder_new(uniffiCallStatus
     )
 }
     self.init(unsafeFromHandle: handle)
@@ -8947,8 +9171,9 @@ public convenience init() {
      */
 open func build() -> UserAgent  {
     return try!  FfiConverterTypeUserAgent_lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_useragentbuilder_build(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -8962,10 +9187,11 @@ open func build() -> UserAgent  {
      */
 open func withAppSegmentForClient(appVersion: String, clientName: String) -> UserAgentBuilder  {
     return try!  FfiConverterTypeUserAgentBuilder_lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_useragentbuilder_with_app_segment_for_client(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(appVersion),
-        FfiConverterString.lower(clientName),$0
+        FfiConverterString.lower(clientName),uniffiCallStatus
     )
 })
 }
@@ -8975,8 +9201,9 @@ open func withAppSegmentForClient(appVersion: String, clientName: String) -> Use
      */
 open func withBedrockSegment() -> UserAgentBuilder  {
     return try!  FfiConverterTypeUserAgentBuilder_lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_useragentbuilder_with_bedrock_segment(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -8986,10 +9213,11 @@ open func withBedrockSegment() -> UserAgentBuilder  {
      */
 open func withSegment(name: String, version: String) -> UserAgentBuilder  {
     return try!  FfiConverterTypeUserAgentBuilder_lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_useragentbuilder_with_segment(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(name),
-        FfiConverterString.lower(version),$0
+        FfiConverterString.lower(version),uniffiCallStatus
     )
 })
 }
@@ -11040,7 +11268,8 @@ public func FfiConverterTypeWorldGiftManagerResult_lower(_ value: WorldGiftManag
  *
  * Further error documentation: <https://docs.toolsforhumanity.com/world-app/backup/components#what-the-service-rejects>
  */
-public enum BackupError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+public 
+enum BackupError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -11371,8 +11600,7 @@ public func FfiConverterTypeBackupError_lower(_ value: BackupError) -> RustBuffe
     return FfiConverterTypeBackupError.lower(value)
 }
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 /**
  * A global identifier that identifies the type of file.
  */
@@ -11477,8 +11705,7 @@ public func FfiConverterTypeBackupFileDesignator_lower(_ value: BackupFileDesign
 }
 
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 /**
  * Kinds of encryption keys present in backup metadata
  */
@@ -11563,8 +11790,7 @@ public func FfiConverterTypeBackupReportEncryptionKeyKind_lower(_ value: BackupR
 }
 
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 /**
  * High-level event kinds we care to report
  */
@@ -11669,8 +11895,7 @@ public func FfiConverterTypeBackupReportEventKind_lower(_ value: BackupReportEve
 }
 
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 /**
  * Represents the environment for Bedrock operations
  */
@@ -11771,7 +11996,8 @@ public func FfiConverterTypeBedrockEnvironment_lower(_ value: BedrockEnvironment
  * - Implements `From<anyhow::Error>` for automatic conversion
  * - Provides helper methods for error handling
  */
-public enum DemoError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+public 
+enum DemoError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -11911,8 +12137,7 @@ public func FfiConverterTypeDemoError_lower(_ value: DemoError) -> RustBuffer {
     return FfiConverterTypeDemoError.lower(value)
 }
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 /**
  * Enum representing different enclave applications
  */
@@ -11981,7 +12206,8 @@ public func FfiConverterTypeEnclaveApplication_lower(_ value: EnclaveApplication
 /**
  * Represents errors that can occur during enclave attestation verification
  */
-public enum EnclaveAttestationError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+public 
+enum EnclaveAttestationError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -12189,8 +12415,7 @@ public func FfiConverterTypeEnclaveAttestationError_lower(_ value: EnclaveAttest
     return FfiConverterTypeEnclaveAttestationError.lower(value)
 }
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 /**
  * The factor type used to encrypt the backup keypair.
  */
@@ -12279,7 +12504,8 @@ public func FfiConverterTypeFactorType_lower(_ value: FactorType) -> RustBuffer 
 /**
  * Errors that can occur during filesystem operations
  */
-public enum FileSystemError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+public 
+enum FileSystemError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -12390,7 +12616,8 @@ public func FfiConverterTypeFileSystemError_lower(_ value: FileSystemError) -> R
 /**
  * Test error enum to verify `FileSystemError` is automatically included
  */
-public enum FileSystemTestError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+public 
+enum FileSystemTestError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -12502,7 +12729,8 @@ public func FfiConverterTypeFileSystemTestError_lower(_ value: FileSystemTestErr
 /**
  * Represents HTTP-related errors that can occur during network requests.
  */
-public enum HttpError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+public 
+enum HttpError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -12690,8 +12918,7 @@ public func FfiConverterTypeHttpError_lower(_ value: HttpError) -> RustBuffer {
     return FfiConverterTypeHttpError.lower(value)
 }
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 /**
  * HTTP methods supported by the authenticated HTTP client.
  */
@@ -12770,7 +12997,8 @@ public func FfiConverterTypeHttpMethod_lower(_ value: HttpMethod) -> RustBuffer 
 /**
  * Errors that can occur when interacting with the device key-value store
  */
-public enum KeyValueStoreError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+public 
+enum KeyValueStoreError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -12877,7 +13105,8 @@ public func FfiConverterTypeKeyValueStoreError_lower(_ value: KeyValueStoreError
 /**
  * Errors returned by a [`KeypairSigner`] implementation.
  */
-public enum KeypairSignerError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+public 
+enum KeypairSignerError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -13014,8 +13243,7 @@ public func FfiConverterTypeKeypairSignerError_lower(_ value: KeypairSignerError
     return FfiConverterTypeKeypairSignerError.lower(value)
 }
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 /**
  * Enumeration of possible log levels.
  *
@@ -13126,7 +13354,8 @@ public func FfiConverterTypeLogLevel_lower(_ value: LogLevel) -> RustBuffer {
 /**
  * Error types for migration operations
  */
-public enum MigrationError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+public 
+enum MigrationError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -13270,8 +13499,7 @@ public func FfiConverterTypeMigrationError_lower(_ value: MigrationError) -> Rus
     return FfiConverterTypeMigrationError.lower(value)
 }
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 /**
  * Status of a single migration
  */
@@ -13376,8 +13604,7 @@ public func FfiConverterTypeMigrationStatus_lower(_ value: MigrationStatus) -> R
 }
 
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 /**
  * Supported blockchain networks for Bedrock operations
  */
@@ -13462,8 +13689,7 @@ public func FfiConverterTypeNetwork_lower(_ value: Network) -> RustBuffer {
 }
 
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 /**
  * Platform enum as reported by clients
  */
@@ -13542,7 +13768,8 @@ public func FfiConverterTypeOs_lower(_ value: Os) -> RustBuffer {
 /**
  * Represents primitive errors on Bedrock. These errors may not be called **from** FFI.
  */
-public enum PrimitiveError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+public 
+enum PrimitiveError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -13668,8 +13895,7 @@ public func FfiConverterTypePrimitiveError_lower(_ value: PrimitiveError) -> Rus
     return FfiConverterTypePrimitiveError.lower(value)
 }
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 /**
  * Result of executing a migration processor
  */
@@ -13778,7 +14004,8 @@ public func FfiConverterTypeProcessorResult_lower(_ value: ProcessorResult) -> R
 /**
  * Errors that can occur when working with the secure module.
  */
-public enum RootKeyError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+public 
+enum RootKeyError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -13896,7 +14123,8 @@ public func FfiConverterTypeRootKeyError_lower(_ value: RootKeyError) -> RustBuf
 /**
  * Errors that can occur when interacting with RPC operations.
  */
-public enum RpcError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+public 
+enum RpcError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -14098,8 +14326,7 @@ public func FfiConverterTypeRpcError_lower(_ value: RpcError) -> RustBuffer {
     return FfiConverterTypeRpcError.lower(value)
 }
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 /**
  * 4337 provider selection to be passed by native apps
  */
@@ -14184,8 +14411,7 @@ public func FfiConverterTypeRpcProviderName_lower(_ value: RpcProviderName) -> R
 }
 
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 /**
  * The type of operation to perform on behalf of the Safe Smart Account.
  *
@@ -14266,7 +14492,8 @@ public func FfiConverterTypeSafeOperation_lower(_ value: SafeOperation) -> RustB
 /**
  * Errors that can occur when working with Safe Smart Accounts.
  */
-public enum SafeSmartAccountError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+public 
+enum SafeSmartAccountError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -14485,7 +14712,8 @@ public func FfiConverterTypeSafeSmartAccountError_lower(_ value: SafeSmartAccoun
 /**
  * Errors raised by SIWE operations (parsing, signing, message construction).
  */
-public enum SiweError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+public 
+enum SiweError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -14652,7 +14880,8 @@ public func FfiConverterTypeSiweError_lower(_ value: SiweError) -> RustBuffer {
 /**
  * Errors that can occur when interacting with transaction operations.
  */
-public enum TransactionError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+public 
+enum TransactionError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -14757,8 +14986,7 @@ public func FfiConverterTypeTransactionError_lower(_ value: TransactionError) ->
     return FfiConverterTypeTransactionError.lower(value)
 }
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 /**
  * First byte of the metadata field. Index starts at 1 as 0 is reserved for "not set".
  * NOTE: Ordering should never change, only new values should be added.
@@ -14835,7 +15063,8 @@ public func FfiConverterTypeTransferAssociation_lower(_ value: TransferAssociati
 
 
 
-public enum TurnkeyError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+public 
+enum TurnkeyError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -15037,7 +15266,8 @@ public func FfiConverterTypeTurnkeyError_lower(_ value: TurnkeyError) -> RustBuf
  * All diagnostic detail is logged inside Bedrock (see [`TurnkeyApiError`]); the
  * client only learns that the run did not succeed.
  */
-public enum TurnkeyMigrationError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+public 
+enum TurnkeyMigrationError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -15129,8 +15359,7 @@ public func FfiConverterTypeTurnkeyMigrationError_lower(_ value: TurnkeyMigratio
     return FfiConverterTypeTurnkeyMigrationError.lower(value)
 }
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 /**
  * Global result from running the entire set of migrations.
  */
@@ -15212,8 +15441,7 @@ public func FfiConverterTypeTurnkeyMigrationOutcome_lower(_ value: TurnkeyMigrat
 }
 
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 /**
  * World App authentication flow variants used to construct SIWE messages.
  */
@@ -15241,9 +15469,10 @@ public enum WorldAppAuthFlow: Equatable, Hashable {
      */
 public func asSiweUri(baseUrl: String) -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_method_worldappauthflow_as_siwe_uri(
             FfiConverterTypeWorldAppAuthFlow_lower(self),
-        FfiConverterString.lower(baseUrl),$0
+        FfiConverterString.lower(baseUrl),uniffiCallStatus
     )
 })
 }
@@ -15915,7 +16144,8 @@ public func uniffiForeignFutureHandleCountBedrock() -> Int {
  */
 public func isBackupServiceApiInitialized() -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_bedrock_fn_func_is_backup_service_api_initialized($0
+        uniffiCallStatus in
+    uniffi_bedrock_fn_func_is_backup_service_api_initialized(uniffiCallStatus
     )
 })
 }
@@ -15924,8 +16154,9 @@ public func isBackupServiceApiInitialized() -> Bool  {
  */
 public func setBackupServiceApi(api: BackupServiceApi) -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_func_set_backup_service_api(
-        FfiConverterTypeBackupServiceApi_lower(api),$0
+        FfiConverterTypeBackupServiceApi_lower(api),uniffiCallStatus
     )
 })
 }
@@ -15947,7 +16178,8 @@ public func setBackupServiceApi(api: BackupServiceApi) -> Bool  {
  */
 public func getConfig() -> BedrockConfig?  {
     return try!  FfiConverterOptionTypeBedrockConfig.lift(try! rustCall() {
-    uniffi_bedrock_fn_func_get_config($0
+        uniffiCallStatus in
+    uniffi_bedrock_fn_func_get_config(uniffiCallStatus
     )
 })
 }
@@ -15959,7 +16191,8 @@ public func getConfig() -> BedrockConfig?  {
  */
 public func isInitialized() -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_bedrock_fn_func_is_initialized($0
+        uniffiCallStatus in
+    uniffi_bedrock_fn_func_is_initialized(uniffiCallStatus
     )
 })
 }
@@ -15984,9 +16217,10 @@ public func isInitialized() -> Bool  {
  * ```
  */
 public func setConfig(environment: BedrockEnvironment, os: Os)  {try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_func_set_config(
         FfiConverterTypeBedrockEnvironment_lower(environment),
-        FfiConverterTypeOs_lower(os),$0
+        FfiConverterTypeOs_lower(os),uniffiCallStatus
     )
 }
 }
@@ -16005,8 +16239,9 @@ public func setConfig(environment: BedrockEnvironment, os: Os)  {try! rustCall()
  * If the filesystem has already been set, this function will print a message and do nothing.
  */
 public func setFilesystem(filesystem: FileSystem)  {try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_func_set_filesystem(
-        FfiConverterTypeFileSystem_lower(filesystem),$0
+        FfiConverterTypeFileSystem_lower(filesystem),uniffiCallStatus
     )
 }
 }
@@ -16028,7 +16263,8 @@ public func setFilesystem(filesystem: FileSystem)  {try! rustCall() {
  */
 public func getHttpClient() -> AuthenticatedHttpClient?  {
     return try!  FfiConverterOptionTypeAuthenticatedHttpClient.lift(try! rustCall() {
-    uniffi_bedrock_fn_func_get_http_client($0
+        uniffiCallStatus in
+    uniffi_bedrock_fn_func_get_http_client(uniffiCallStatus
     )
 })
 }
@@ -16040,7 +16276,8 @@ public func getHttpClient() -> AuthenticatedHttpClient?  {
  */
 public func isHttpClientInitialized() -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_bedrock_fn_func_is_http_client_initialized($0
+        uniffiCallStatus in
+    uniffi_bedrock_fn_func_is_http_client_initialized(uniffiCallStatus
     )
 })
 }
@@ -16068,8 +16305,9 @@ public func isHttpClientInitialized() -> Bool  {
  * ```
  */
 public func setHttpClient(httpClient: AuthenticatedHttpClient)  {try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_func_set_http_client(
-        FfiConverterTypeAuthenticatedHttpClient_lower(httpClient),$0
+        FfiConverterTypeAuthenticatedHttpClient_lower(httpClient),uniffiCallStatus
     )
 }
 }
@@ -16090,8 +16328,9 @@ public func setHttpClient(httpClient: AuthenticatedHttpClient)  {try! rustCall()
  * Only the first logger is used; later calls keep the original and are no-ops.
  */
 public func setLogger(logger: Logger)  {try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_func_set_logger(
-        FfiConverterTypeLogger_lower(logger),$0
+        FfiConverterTypeLogger_lower(logger),uniffiCallStatus
     )
 }
 }
@@ -16099,8 +16338,9 @@ public func setLogger(logger: Logger)  {try! rustCall() {
  * Configures the global time provider.
  */
 public func setTimeProvider(provider: Ntp)  {try! rustCall() {
+        uniffiCallStatus in
     uniffi_bedrock_fn_func_set_time_provider(
-        FfiConverterTypeNtp_lower(provider),$0
+        FfiConverterTypeNtp_lower(provider),uniffiCallStatus
     )
 }
 }
@@ -16111,7 +16351,8 @@ public func setTimeProvider(provider: Ntp)  {try! rustCall() {
  */
 public func entrypointAddress() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
-    uniffi_bedrock_fn_func_entrypoint_address($0
+        uniffiCallStatus in
+    uniffi_bedrock_fn_func_entrypoint_address(uniffiCallStatus
     )
 })
 }
@@ -16129,8 +16370,9 @@ public func entrypointAddress() -> String  {
  */
 public func computeWalletAddressForFreshAccount(eoaAddress: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeSafeSmartAccountError_lift) {
+        uniffiCallStatus in
     uniffi_bedrock_fn_func_compute_wallet_address_for_fresh_account(
-        FfiConverterString.lower(eoaAddress),$0
+        FfiConverterString.lower(eoaAddress),uniffiCallStatus
     )
 })
 }
@@ -16178,412 +16420,412 @@ private let initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_bedrock_checksum_func_is_backup_service_api_initialized() != 12521) {
+    if (uniffi_bedrock_checksum_func_is_backup_service_api_initialized() != 61395) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_func_set_backup_service_api() != 10925) {
+    if (uniffi_bedrock_checksum_func_set_backup_service_api() != 13577) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_func_get_config() != 53467) {
+    if (uniffi_bedrock_checksum_func_get_config() != 25598) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_func_is_initialized() != 40862) {
+    if (uniffi_bedrock_checksum_func_is_initialized() != 2060) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_func_set_config() != 60925) {
+    if (uniffi_bedrock_checksum_func_set_config() != 32927) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_func_set_filesystem() != 34298) {
+    if (uniffi_bedrock_checksum_func_set_filesystem() != 57925) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_func_get_http_client() != 21421) {
+    if (uniffi_bedrock_checksum_func_get_http_client() != 7609) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_func_is_http_client_initialized() != 49106) {
+    if (uniffi_bedrock_checksum_func_is_http_client_initialized() != 37422) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_func_set_http_client() != 43643) {
+    if (uniffi_bedrock_checksum_func_set_http_client() != 3076) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_func_set_logger() != 11830) {
+    if (uniffi_bedrock_checksum_func_set_logger() != 65057) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_func_set_time_provider() != 54619) {
+    if (uniffi_bedrock_checksum_func_set_time_provider() != 62227) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_func_entrypoint_address() != 51207) {
+    if (uniffi_bedrock_checksum_func_entrypoint_address() != 63599) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_func_compute_wallet_address_for_fresh_account() != 57053) {
+    if (uniffi_bedrock_checksum_func_compute_wallet_address_for_fresh_account() != 20263) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_func_verify_bundler_rpc_entrypoint() != 40638) {
+    if (uniffi_bedrock_checksum_func_verify_bundler_rpc_entrypoint() != 8277) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_backupmanager_add_new_factor() != 7884) {
+    if (uniffi_bedrock_checksum_method_backupmanager_add_new_factor() != 63054) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_backupmanager_create_sealed_backup_for_new_user() != 22156) {
+    if (uniffi_bedrock_checksum_method_backupmanager_create_sealed_backup_for_new_user() != 22254) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_backupmanager_debug_get_local_manifest() != 27881) {
+    if (uniffi_bedrock_checksum_method_backupmanager_debug_get_local_manifest() != 45911) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_backupmanager_decrypt_and_unpack_sealed_backup() != 25866) {
+    if (uniffi_bedrock_checksum_method_backupmanager_decrypt_and_unpack_sealed_backup() != 12457) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_backupmanager_get_backup_account() != 43349) {
+    if (uniffi_bedrock_checksum_method_backupmanager_get_backup_account() != 8461) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_backupmanager_is_local_backup_stale() != 23084) {
+    if (uniffi_bedrock_checksum_method_backupmanager_is_local_backup_stale() != 22115) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_backupmanager_post_delete_backup() != 9039) {
+    if (uniffi_bedrock_checksum_method_backupmanager_post_delete_backup() != 57272) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_backupmanager_send_event() != 15395) {
+    if (uniffi_bedrock_checksum_method_backupmanager_send_event() != 36564) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_backupmanager_set_backup_report_attributes() != 28311) {
+    if (uniffi_bedrock_checksum_method_backupmanager_set_backup_report_attributes() != 8790) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_backupmanager_sign_with_backup_account_key() != 38909) {
+    if (uniffi_bedrock_checksum_method_backupmanager_sign_with_backup_account_key() != 1936) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_manifestmanager_list_files() != 2075) {
+    if (uniffi_bedrock_checksum_method_manifestmanager_list_files() != 41763) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_manifestmanager_remove_file() != 50413) {
+    if (uniffi_bedrock_checksum_method_manifestmanager_remove_file() != 17096) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_manifestmanager_replace_all_files_for_designator() != 23887) {
+    if (uniffi_bedrock_checksum_method_manifestmanager_replace_all_files_for_designator() != 35086) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_manifestmanager_store_file() != 64247) {
+    if (uniffi_bedrock_checksum_method_manifestmanager_store_file() != 26366) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_backupserviceapi_sync() != 58514) {
+    if (uniffi_bedrock_checksum_method_backupserviceapi_sync() != 42793) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_backupserviceapi_retrieve_metadata() != 37826) {
+    if (uniffi_bedrock_checksum_method_backupserviceapi_retrieve_metadata() != 28607) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_turnkey_decrypt_factor_secret() != 9730) {
+    if (uniffi_bedrock_checksum_method_turnkey_decrypt_factor_secret() != 14662) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_turnkey_derive_public_key() != 22015) {
+    if (uniffi_bedrock_checksum_method_turnkey_derive_public_key() != 64048) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_turnkey_generate_import_bundle_for_factor_secret() != 24779) {
+    if (uniffi_bedrock_checksum_method_turnkey_generate_import_bundle_for_factor_secret() != 12797) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_turnkey_stamp() != 28531) {
+    if (uniffi_bedrock_checksum_method_turnkey_stamp() != 2941) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_turnkey_stamp_with_backup_account_key() != 34668) {
+    if (uniffi_bedrock_checksum_method_turnkey_stamp_with_backup_account_key() != 21059) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_turnkeymanager_run_migrations() != 9401) {
+    if (uniffi_bedrock_checksum_method_turnkeymanager_run_migrations() != 64849) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_migrationcontroller_delete_all_records() != 44884) {
+    if (uniffi_bedrock_checksum_method_migrationcontroller_delete_all_records() != 39239) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_migrationcontroller_list_all_records() != 65242) {
+    if (uniffi_bedrock_checksum_method_migrationcontroller_list_all_records() != 24696) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_migrationcontroller_run_migrations() != 30600) {
+    if (uniffi_bedrock_checksum_method_migrationcontroller_run_migrations() != 62787) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_migrationprocessor_migration_id() != 23287) {
+    if (uniffi_bedrock_checksum_method_migrationprocessor_migration_id() != 26747) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_migrationprocessor_is_applicable() != 30335) {
+    if (uniffi_bedrock_checksum_method_migrationprocessor_is_applicable() != 29705) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_migrationprocessor_execute() != 7502) {
+    if (uniffi_bedrock_checksum_method_migrationprocessor_execute() != 15454) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safe4337moduleprocessor_as_migration_processor() != 52124) {
+    if (uniffi_bedrock_checksum_method_safe4337moduleprocessor_as_migration_processor() != 17567) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_enclaveattestationverifier_verify_attestation_document_and_encrypt() != 2460) {
+    if (uniffi_bedrock_checksum_method_enclaveattestationverifier_verify_attestation_document_and_encrypt() != 47493) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_enclaveattestationverifier_verify_attestation_document_base64() != 24533) {
+    if (uniffi_bedrock_checksum_method_enclaveattestationverifier_verify_attestation_document_base64() != 31151) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_hexencodeddata_to_hex_string() != 29346) {
+    if (uniffi_bedrock_checksum_method_hexencodeddata_to_hex_string() != 16411) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_hexencodeddata_to_vec() != 29669) {
+    if (uniffi_bedrock_checksum_method_hexencodeddata_to_vec() != 30385) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_bedrockaddress_as_abi_encode() != 62900) {
+    if (uniffi_bedrock_checksum_method_bedrockaddress_as_abi_encode() != 23098) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_bedrockaddress_as_abi_encode_packed() != 28431) {
+    if (uniffi_bedrock_checksum_method_bedrockaddress_as_abi_encode_packed() != 9784) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_bedrockaddress_as_checksummed_str() != 26722) {
+    if (uniffi_bedrock_checksum_method_bedrockaddress_as_checksummed_str() != 12340) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_bedrockconfig_environment() != 35277) {
+    if (uniffi_bedrock_checksum_method_bedrockconfig_environment() != 34433) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_bedrockconfig_os() != 29572) {
+    if (uniffi_bedrock_checksum_method_bedrockconfig_os() != 3805) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_filesystem_file_exists() != 59490) {
+    if (uniffi_bedrock_checksum_method_filesystem_file_exists() != 22065) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_filesystem_read_file() != 56065) {
+    if (uniffi_bedrock_checksum_method_filesystem_read_file() != 51979) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_filesystem_list_files_at_directory() != 55867) {
+    if (uniffi_bedrock_checksum_method_filesystem_list_files_at_directory() != 15007) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_filesystem_read_file_range() != 27830) {
+    if (uniffi_bedrock_checksum_method_filesystem_read_file_range() != 5376) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_filesystem_write_file() != 9482) {
+    if (uniffi_bedrock_checksum_method_filesystem_write_file() != 58992) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_filesystem_delete_file() != 57257) {
+    if (uniffi_bedrock_checksum_method_filesystem_delete_file() != 800) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_authenticatedhttpclient_fetch_from_app_backend() != 45624) {
+    if (uniffi_bedrock_checksum_method_authenticatedhttpclient_fetch_from_app_backend() != 32534) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_devicekeyvaluestore_get() != 64568) {
+    if (uniffi_bedrock_checksum_method_devicekeyvaluestore_get() != 21116) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_devicekeyvaluestore_set() != 36570) {
+    if (uniffi_bedrock_checksum_method_devicekeyvaluestore_set() != 3234) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_devicekeyvaluestore_delete() != 43255) {
+    if (uniffi_bedrock_checksum_method_devicekeyvaluestore_delete() != 27171) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_logger_log() != 60343) {
+    if (uniffi_bedrock_checksum_method_logger_log() != 36859) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_ntp_now_millis() != 25299) {
+    if (uniffi_bedrock_checksum_method_ntp_now_millis() != 42772) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_keypairsigner_public_key() != 13151) {
+    if (uniffi_bedrock_checksum_method_keypairsigner_public_key() != 38701) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_keypairsigner_sign_digest() != 17786) {
+    if (uniffi_bedrock_checksum_method_keypairsigner_sign_digest() != 7557) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_filesystemtester_test_delete_file() != 26183) {
+    if (uniffi_bedrock_checksum_method_filesystemtester_test_delete_file() != 20259) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_filesystemtester_test_file_exists() != 19182) {
+    if (uniffi_bedrock_checksum_method_filesystemtester_test_file_exists() != 4534) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_filesystemtester_test_list_files_at_directory() != 9603) {
+    if (uniffi_bedrock_checksum_method_filesystemtester_test_list_files_at_directory() != 23205) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_filesystemtester_test_read_file() != 305) {
+    if (uniffi_bedrock_checksum_method_filesystemtester_test_read_file() != 18955) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_filesystemtester_test_write_file() != 42282) {
+    if (uniffi_bedrock_checksum_method_filesystemtester_test_write_file() != 48997) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_httpclienttester_fetch_bad_status_code() != 38066) {
+    if (uniffi_bedrock_checksum_method_httpclienttester_fetch_bad_status_code() != 41558) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_toolingdemo_demo_async_operation() != 45391) {
+    if (uniffi_bedrock_checksum_method_toolingdemo_demo_async_operation() != 36927) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_toolingdemo_demo_authenticate() != 11867) {
+    if (uniffi_bedrock_checksum_method_toolingdemo_demo_authenticate() != 36322) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_toolingdemo_demo_generic_operation() != 28752) {
+    if (uniffi_bedrock_checksum_method_toolingdemo_demo_generic_operation() != 25150) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_toolingdemo_demo_mixed_operation() != 19410) {
+    if (uniffi_bedrock_checksum_method_toolingdemo_demo_mixed_operation() != 20776) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_toolingdemo_get_demo_result() != 3496) {
+    if (uniffi_bedrock_checksum_method_toolingdemo_get_demo_result() != 21086) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_toolingdemo_log_message() != 21822) {
+    if (uniffi_bedrock_checksum_method_toolingdemo_log_message() != 64823) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_toolingdemo_test_log_levels() != 27236) {
+    if (uniffi_bedrock_checksum_method_toolingdemo_test_log_levels() != 34304) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_useragent_header_value() != 44994) {
+    if (uniffi_bedrock_checksum_method_useragent_header_value() != 34504) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_useragentbuilder_build() != 64336) {
+    if (uniffi_bedrock_checksum_method_useragentbuilder_build() != 1240) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_useragentbuilder_with_app_segment_for_client() != 48327) {
+    if (uniffi_bedrock_checksum_method_useragentbuilder_with_app_segment_for_client() != 22422) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_useragentbuilder_with_bedrock_segment() != 31505) {
+    if (uniffi_bedrock_checksum_method_useragentbuilder_with_bedrock_segment() != 39123) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_useragentbuilder_with_segment() != 48407) {
+    if (uniffi_bedrock_checksum_method_useragentbuilder_with_segment() != 54428) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_rootkey_is_equal_to() != 28056) {
+    if (uniffi_bedrock_checksum_method_rootkey_is_equal_to() != 37564) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_rootkey_is_v0() != 24729) {
+    if (uniffi_bedrock_checksum_method_rootkey_is_v0() != 59753) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_siwemessage_address() != 32221) {
+    if (uniffi_bedrock_checksum_method_siwemessage_address() != 26711) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_siwemessage_domain() != 40663) {
+    if (uniffi_bedrock_checksum_method_siwemessage_domain() != 55075) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_siwemessage_sign() != 10511) {
+    if (uniffi_bedrock_checksum_method_siwemessage_sign() != 17773) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_siwemessage_statement() != 11389) {
+    if (uniffi_bedrock_checksum_method_siwemessage_statement() != 52146) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_siwemessage_to_cache_hash() != 24625) {
+    if (uniffi_bedrock_checksum_method_siwemessage_to_cache_hash() != 60875) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_siwemessage_to_message_string() != 22646) {
+    if (uniffi_bedrock_checksum_method_siwemessage_to_message_string() != 21715) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_personal_sign() != 44448) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_personal_sign() != 39497) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_sign_4337_op() != 51056) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_sign_4337_op() != 8866) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_sign_permit2_transfer() != 36460) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_sign_permit2_transfer() != 20929) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_sign_transaction() != 58792) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_sign_transaction() != 3153) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_sign_typed_data() != 12862) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_sign_typed_data() != 3560) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_as_eip191_signer() != 54864) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_as_eip191_signer() != 3533) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_erc4626_deposit() != 11491) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_erc4626_deposit() != 4260) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_erc4626_redeem() != 35079) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_erc4626_redeem() != 15823) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_erc4626_withdraw() != 47917) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_erc4626_withdraw() != 48019) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_permit2_approve() != 65419) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_permit2_approve() != 15433) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_transfer() != 12529) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_transfer() != 65523) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_usd_legacy_vault_migrate() != 17686) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_usd_legacy_vault_migrate() != 7207) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_wld_legacy_vault_migrate() != 37719) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_wld_legacy_vault_migrate() != 14502) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_world_gift_manager_cancel() != 37005) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_world_gift_manager_cancel() != 57619) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_world_gift_manager_gift() != 35987) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_world_gift_manager_gift() != 27452) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_world_gift_manager_redeem() != 36600) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_world_gift_manager_redeem() != 62071) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_wa_get_user_operation_receipt() != 35736) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_wa_get_user_operation_receipt() != 5284) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_send_bundler_sponsored_user_operation() != 62094) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_send_bundler_sponsored_user_operation() != 36446) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_smartaccountkeymanager_get_eoa_private_key() != 36336) {
+    if (uniffi_bedrock_checksum_method_smartaccountkeymanager_get_eoa_private_key() != 23204) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_eip191signer_sign_eip_191() != 29470) {
+    if (uniffi_bedrock_checksum_method_eip191signer_sign_eip_191() != 47771) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_eoasigner_address() != 40956) {
+    if (uniffi_bedrock_checksum_method_eoasigner_address() != 1460) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_eoasigner_as_eip191_signer() != 35398) {
+    if (uniffi_bedrock_checksum_method_eoasigner_as_eip191_signer() != 42772) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_backupmanager_new() != 27832) {
+    if (uniffi_bedrock_checksum_constructor_backupmanager_new() != 17248) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_manifestmanager_new() != 26111) {
+    if (uniffi_bedrock_checksum_constructor_manifestmanager_new() != 46985) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_turnkey_new() != 46031) {
+    if (uniffi_bedrock_checksum_constructor_turnkey_new() != 39114) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_turnkeymanager_new() != 29118) {
+    if (uniffi_bedrock_checksum_constructor_turnkeymanager_new() != 38903) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_migrationcontroller_new() != 60371) {
+    if (uniffi_bedrock_checksum_constructor_migrationcontroller_new() != 43548) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_safe4337moduleprocessor_new() != 20630) {
+    if (uniffi_bedrock_checksum_constructor_safe4337moduleprocessor_new() != 16858) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_enclaveattestationverifier_new() != 36598) {
+    if (uniffi_bedrock_checksum_constructor_enclaveattestationverifier_new() != 54250) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_hexencodeddata_new() != 60782) {
+    if (uniffi_bedrock_checksum_constructor_hexencodeddata_new() != 30097) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_bedrockaddress_new() != 52277) {
+    if (uniffi_bedrock_checksum_constructor_bedrockaddress_new() != 8405) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_bedrockconfig_new() != 4256) {
+    if (uniffi_bedrock_checksum_constructor_bedrockconfig_new() != 29678) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_p256signer_verify() != 51314) {
+    if (uniffi_bedrock_checksum_constructor_p256signer_verify() != 12309) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_filesystemtester_new() != 50441) {
+    if (uniffi_bedrock_checksum_constructor_filesystemtester_new() != 1884) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_httpclienttester_new() != 30788) {
+    if (uniffi_bedrock_checksum_constructor_httpclienttester_new() != 39553) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_toolingdemo_new() != 2212) {
+    if (uniffi_bedrock_checksum_constructor_toolingdemo_new() != 35145) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_useragentbuilder_new() != 35070) {
+    if (uniffi_bedrock_checksum_constructor_useragentbuilder_new() != 37316) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_rootkey_from_json() != 31365) {
+    if (uniffi_bedrock_checksum_constructor_rootkey_from_json() != 23290) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_rootkey_from_slice() != 24099) {
+    if (uniffi_bedrock_checksum_constructor_rootkey_from_slice() != 53979) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_rootkey_new_random() != 47400) {
+    if (uniffi_bedrock_checksum_constructor_rootkey_new_random() != 9177) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_siwemessage_from_str_with_account() != 10910) {
+    if (uniffi_bedrock_checksum_constructor_siwemessage_from_str_with_account() != 46537) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_siwemessage_from_world_app_auth_request() != 38309) {
+    if (uniffi_bedrock_checksum_constructor_siwemessage_from_world_app_auth_request() != 55095) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_safesmartaccount_new() != 56875) {
+    if (uniffi_bedrock_checksum_constructor_safesmartaccount_new() != 15379) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_eoasigner_new() != 47975) {
+    if (uniffi_bedrock_checksum_constructor_eoasigner_new() != 37509) {
         return InitializationResult.apiChecksumMismatch
     }
 
