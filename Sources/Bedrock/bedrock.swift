@@ -624,6 +624,258 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
 
 
 /**
+ * A provider of Attestation Gateway tokens.
+ */
+public protocol AttestationTokenProvider: AnyObject, Sendable {
+    
+    /**
+     * Returns an Attestation Gateway token bound to `request_hash`. Bedrock is responsible
+     * for providing the final request hash. The native app signs the opaque hash.
+     *
+     * `request_hash` is the hex-encoded SHA-256 the gateway will recompute from the
+     * outgoing request; the returned token's `jti` claim MUST equal it.
+     *
+     * # Errors
+     * Returns [`HttpError`] if the token cannot be produced (e.g. attestation is
+     * unavailable or the gateway call fails).
+     */
+    func attestationToken(requestHash: String) async throws  -> String
+    
+}
+/**
+ * A provider of Attestation Gateway tokens.
+ */
+open class AttestationTokenProviderImpl: AttestationTokenProvider, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_attestationtokenprovider(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_bedrock_fn_free_attestationtokenprovider(handle, $0) }
+    }
+
+    
+
+    
+    /**
+     * Returns an Attestation Gateway token bound to `request_hash`. Bedrock is responsible
+     * for providing the final request hash. The native app signs the opaque hash.
+     *
+     * `request_hash` is the hex-encoded SHA-256 the gateway will recompute from the
+     * outgoing request; the returned token's `jti` claim MUST equal it.
+     *
+     * # Errors
+     * Returns [`HttpError`] if the token cannot be produced (e.g. attestation is
+     * unavailable or the gateway call fails).
+     */
+open func attestationToken(requestHash: String)async throws  -> String  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_attestationtokenprovider_attestation_token(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(requestHash)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
+            completeFunc: ffi_bedrock_rust_future_complete_rust_buffer,
+            freeFunc: ffi_bedrock_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeHttpError_lift
+        )
+}
+    
+
+    
+}
+
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceAttestationTokenProvider {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    //
+    // Store the vtable directly.
+    static let vtable: UniffiVTableCallbackInterfaceAttestationTokenProvider = UniffiVTableCallbackInterfaceAttestationTokenProvider(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterTypeAttestationTokenProvider.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface AttestationTokenProvider: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterTypeAttestationTokenProvider.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface AttestationTokenProvider: handle missing in uniffiClone")
+            }
+        },
+        attestationToken: { (
+            uniffiHandle: UInt64,
+            requestHash: RustBuffer,
+            uniffiFutureCallback: @escaping UniffiForeignFutureCompleteRustBuffer,
+            uniffiCallbackData: UInt64,
+            uniffiOutDroppedCallback: UnsafeMutablePointer<UniffiForeignFutureDroppedCallbackStruct>
+        ) in
+            let makeCall = {
+                () async throws -> String in
+                guard let uniffiObj = try? FfiConverterTypeAttestationTokenProvider.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try await uniffiObj.attestationToken(
+                     requestHash: try FfiConverterString.lift(requestHash)
+                )
+            }
+
+            let uniffiHandleSuccess = { (returnValue: String) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultRustBuffer(
+                        returnValue: FfiConverterString.lower(returnValue),
+                        callStatus: RustCallStatus()
+                    )
+                )
+            }
+            let uniffiHandleError = { (statusCode, errorBuf) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureResultRustBuffer(
+                        returnValue: RustBuffer.empty(),
+                        callStatus: RustCallStatus(code: statusCode, errorBuf: errorBuf)
+                    )
+                )
+            }
+            uniffiTraitInterfaceCallAsyncWithError(
+                makeCall: makeCall,
+                handleSuccess: uniffiHandleSuccess,
+                handleError: uniffiHandleError,
+                lowerError: FfiConverterTypeHttpError_lower,
+                droppedCallback: uniffiOutDroppedCallback
+            )
+        }
+    )
+
+    // Rust stores this pointer for future callback invocations, so it must live
+    // for the process lifetime (not just for the init function call).
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceAttestationTokenProvider> = {
+        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceAttestationTokenProvider>.allocate(capacity: 1)
+        ptr.initialize(to: vtable)
+        return UnsafePointer(ptr)
+    }()
+}
+
+private func uniffiCallbackInitAttestationTokenProvider() {
+    uniffi_bedrock_fn_init_callback_vtable_attestationtokenprovider(UniffiCallbackInterfaceAttestationTokenProvider.vtablePtr)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAttestationTokenProvider: FfiConverter {
+    fileprivate static let handleMap = UniffiHandleMap<AttestationTokenProvider>()
+
+    typealias FfiType = UInt64
+    typealias SwiftType = AttestationTokenProvider
+
+    public static func lift(_ handle: UInt64) throws -> AttestationTokenProvider {
+        if ((handle & 1) == 0) {
+            // Rust-generated handle, construct a new class that uses the handle to implement the
+            // interface
+            return AttestationTokenProviderImpl(unsafeFromHandle: handle)
+        } else {
+            // Swift-generated handle, get the object from the handle map
+            return try handleMap.remove(handle: handle)
+        }
+    }
+
+    public static func lower(_ value: AttestationTokenProvider) -> UInt64 {
+         if let rustImpl = value as? AttestationTokenProviderImpl {
+             // Rust-implemented object.  Clone the handle and return it
+            return rustImpl.uniffiCloneHandle()
+         } else {
+            // Swift object, generate a new vtable handle and return that.
+            return handleMap.insert(obj: value)
+         }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AttestationTokenProvider {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: AttestationTokenProvider, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAttestationTokenProvider_lift(_ handle: UInt64) throws -> AttestationTokenProvider {
+    return try FfiConverterTypeAttestationTokenProvider.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAttestationTokenProvider_lower(_ value: AttestationTokenProvider) -> UInt64 {
+    return FfiConverterTypeAttestationTokenProvider.lower(value)
+}
+
+
+
+
+
+
+/**
  * Authenticated HTTP client interface that native applications must implement for bedrock to make backend requests.
  *
  * This trait allows bedrock to make HTTP requests through the native app's networking stack,
@@ -1058,17 +1310,49 @@ public protocol BackupManagerProtocol: AnyObject, Sendable {
     func isLocalBackupStale(remoteManifestHash: String) throws  -> Bool
     
     /**
-     * Should be called after the backup is disabled/deleted.
+     * Removes the main factor `factor_id` from the user's backup (BF-7) everywhere.
      *
-     * It processes local state after the backup is disabled/deleted.
+     * # Important Considerations
+     * - If you're removing the last main factor, the backup will be destroyed instead, the
+     * user MUST see an explicit prompt and approve.
+     * - If removing an OIDC Factor and it's **not the last** OIDC factor, a [`MainFactor`] is
+     * needed. Passkey removal does not need Turnkey.
+     * - iCloud Keychain factors are not yet supported and return [`BackupOperationError::Unsupported`];
+     * in any case they're currently not displayed in the UI and are getting deprecated.
      *
-     * Currently it:
-     * 1. Deletes the local manifest file.
+     * # Native responsibilities
+     * - On [`RemoveFactorOutcome::BackupDeleted`] the caller MUST delete its stored
+     * sync-factor keypair and refresh its "backup enabled" state.
+     *
+     * # Arguments
+     * - `sync_factor`: the sync-factor [`P256Signer`]; authenticates the backup
+     * service calls and stamps the Turnkey sub-organization teardown.
+     * - `main_factor`: an optional main-factor [`P256Signer`]. Required to delete an
+     * OAuth provider if it is **not** the last one.
+     * - `factor_id`: the id of the factor to remove.
+     * - `user_confirmed_backup_removal`: set only after the user has confirmed that
+     * removing the last main factor will delete the entire backup.
      *
      * # Errors
-     * - Returns an error if the post-processing fails.
+     * Returns [`BackupOperationError`]. Two variants are signals native clients must
+     * handle specifically rather than surfacing as a generic failure:
+     * [`BackupOperationError::WouldDeleteBackup`] (prompt for confirmation, then retry
+     * with `user_confirmed_backup_removal`) and [`BackupOperationError::NeedsReauth`]
+     * (run a passkey ceremony to obtain what the reason names, then retry).
      */
-    func postDeleteBackup() throws 
+    func removeFactor(syncFactor: P256Signer, mainFactor: P256Signer?, factorId: String, userConfirmedBackupRemoval: Bool) async throws  -> RemoveFactorOutcome
+    
+    /**
+     * Retrieves the user's current backup metadata.
+     *
+     * # Threading
+     * Performs network I/O; callers SHOULD invoke it off the main thread.
+     *
+     * # Errors
+     * Returns [`BackupOperationError`]; an `unauthorized_factor` rejection surfaces
+     * as [`BackupOperationError::NeedsReauth`].
+     */
+    func retrieveMetadata(syncFactor: P256Signer) async throws  -> BackupMetadata
     
     /**
      * Send a single event by merging with base report and posting to backend.
@@ -1358,22 +1642,76 @@ open func isLocalBackupStale(remoteManifestHash: String)throws  -> Bool  {
 }
     
     /**
-     * Should be called after the backup is disabled/deleted.
+     * Removes the main factor `factor_id` from the user's backup (BF-7) everywhere.
      *
-     * It processes local state after the backup is disabled/deleted.
+     * # Important Considerations
+     * - If you're removing the last main factor, the backup will be destroyed instead, the
+     * user MUST see an explicit prompt and approve.
+     * - If removing an OIDC Factor and it's **not the last** OIDC factor, a [`MainFactor`] is
+     * needed. Passkey removal does not need Turnkey.
+     * - iCloud Keychain factors are not yet supported and return [`BackupOperationError::Unsupported`];
+     * in any case they're currently not displayed in the UI and are getting deprecated.
      *
-     * Currently it:
-     * 1. Deletes the local manifest file.
+     * # Native responsibilities
+     * - On [`RemoveFactorOutcome::BackupDeleted`] the caller MUST delete its stored
+     * sync-factor keypair and refresh its "backup enabled" state.
+     *
+     * # Arguments
+     * - `sync_factor`: the sync-factor [`P256Signer`]; authenticates the backup
+     * service calls and stamps the Turnkey sub-organization teardown.
+     * - `main_factor`: an optional main-factor [`P256Signer`]. Required to delete an
+     * OAuth provider if it is **not** the last one.
+     * - `factor_id`: the id of the factor to remove.
+     * - `user_confirmed_backup_removal`: set only after the user has confirmed that
+     * removing the last main factor will delete the entire backup.
      *
      * # Errors
-     * - Returns an error if the post-processing fails.
+     * Returns [`BackupOperationError`]. Two variants are signals native clients must
+     * handle specifically rather than surfacing as a generic failure:
+     * [`BackupOperationError::WouldDeleteBackup`] (prompt for confirmation, then retry
+     * with `user_confirmed_backup_removal`) and [`BackupOperationError::NeedsReauth`]
+     * (run a passkey ceremony to obtain what the reason names, then retry).
      */
-open func postDeleteBackup()throws   {try rustCallWithError(FfiConverterTypeBackupError_lift) {
-        uniffiCallStatus in
-    uniffi_bedrock_fn_method_backupmanager_post_delete_backup(
-            self.uniffiCloneHandle(),uniffiCallStatus
-    )
+open func removeFactor(syncFactor: P256Signer, mainFactor: P256Signer?, factorId: String, userConfirmedBackupRemoval: Bool)async throws  -> RemoveFactorOutcome  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_backupmanager_remove_factor(
+                        self.uniffiCloneHandle(),FfiConverterTypeP256Signer_lower(syncFactor),FfiConverterOptionTypeP256Signer.lower(mainFactor),FfiConverterString.lower(factorId),FfiConverterBool.lower(userConfirmedBackupRemoval)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
+            completeFunc: ffi_bedrock_rust_future_complete_rust_buffer,
+            freeFunc: ffi_bedrock_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeRemoveFactorOutcome_lift,
+            errorHandler: FfiConverterTypeBackupOperationError_lift
+        )
 }
+    
+    /**
+     * Retrieves the user's current backup metadata.
+     *
+     * # Threading
+     * Performs network I/O; callers SHOULD invoke it off the main thread.
+     *
+     * # Errors
+     * Returns [`BackupOperationError`]; an `unauthorized_factor` rejection surfaces
+     * as [`BackupOperationError::NeedsReauth`].
+     */
+open func retrieveMetadata(syncFactor: P256Signer)async throws  -> BackupMetadata  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_backupmanager_retrieve_metadata(
+                        self.uniffiCloneHandle(),FfiConverterTypeP256Signer_lower(syncFactor)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
+            completeFunc: ffi_bedrock_rust_future_complete_rust_buffer,
+            freeFunc: ffi_bedrock_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeBackupMetadata_lift,
+            errorHandler: FfiConverterTypeBackupOperationError_lift
+        )
 }
     
     /**
@@ -1502,6 +1840,7 @@ public func FfiConverterTypeBackupManager_lower(_ value: BackupManager) -> UInt6
  * Foreign trait that native layers implement to perform backup-service network calls.
  *
  * If set, this will be used by Bedrock instead of any internal HTTP client.
+
  */
 public protocol BackupServiceApi: AnyObject, Sendable {
     
@@ -1527,6 +1866,7 @@ public protocol BackupServiceApi: AnyObject, Sendable {
  * Foreign trait that native layers implement to perform backup-service network calls.
  *
  * If set, this will be used by Bedrock instead of any internal HTTP client.
+
  */
 open class BackupServiceApiImpl: BackupServiceApi, @unchecked Sendable {
     fileprivate let handle: UInt64
@@ -2065,22 +2405,26 @@ open class BedrockConfig: BedrockConfigProtocol, @unchecked Sendable {
      *
      * # Arguments
      * * `environment` - The environment to use for this configuration
+     * * `os` - The platform the app is running on
+     * * `data_directory` - Absolute path Bedrock resolves every file against. Shared with
+     * the app and other libraries; `.bedrock-staged` is reserved.
      *
      * # Examples
      *
      * ## Swift
      *
      * ```swift
-     * let config = BedrockConfig(environment: .production)
+     * let config = BedrockConfig(environment: .production, os: .ios, rootPath: rootURL.path)
      * ```
      */
-public convenience init(environment: BedrockEnvironment, os: Os) {
+public convenience init(environment: BedrockEnvironment, os: Os, dataDirectory: String) {
     let handle =
         try! rustCall() {
         uniffiCallStatus in
     uniffi_bedrock_fn_constructor_bedrockconfig_new(
         FfiConverterTypeBedrockEnvironment_lower(environment),
-        FfiConverterTypeOs_lower(os),uniffiCallStatus
+        FfiConverterTypeOs_lower(os),
+        FfiConverterString.lower(dataDirectory),uniffiCallStatus
     )
 }
     self.init(unsafeFromHandle: handle)
@@ -3062,494 +3406,6 @@ public func FfiConverterTypeEoaSigner_lower(_ value: EoaSigner) -> UInt64 {
 
 
 /**
- * Trait representing a filesystem that can be implemented by the native side
- */
-public protocol FileSystem: AnyObject, Sendable {
-    
-    /**
-     * Check if a file exists at the given path
-     *
-     * # Errors
-     * - `FileSystemError` if the operation fails
-     */
-    func fileExists(filePath: String) throws  -> Bool
-    
-    /**
-     * Read file contents
-     *
-     * # Errors
-     * - `FileSystemError::IoFailure` if the file cannot be read
-     * - `FileSystemError::FileDoesNotExist` if the file doesn't exist
-     */
-    func readFile(filePath: String) throws  -> Data
-    
-    /**
-     * List files in a specific directory. No recursion and no subdirectories are returned.
-     *
-     * # Notes
-     * Files are returned without the directory path. Only the file name is returned.
-     *
-     * # Errors
-     * - `FileSystemError::IoFailure` if the directory cannot be listed
-     */
-    func listFilesAtDirectory(folderPath: String) throws  -> [String]
-    
-    /**
-     * Read a specific byte range from a file
-     *
-     * Returns up to `max_length` bytes starting at `offset`. Returns an empty vector
-     * when `offset` is at or beyond the end of the file.
-     *
-     * # Errors
-     * - `FileSystemError::IoFailure` if the file cannot be read
-     * - `FileSystemError::FileDoesNotExist` if the file doesn't exist
-     */
-    func readFileRange(filePath: String, offset: UInt64, maxLength: UInt64) throws  -> Data
-    
-    /**
-     * Write file contents
-     *
-     * # Errors
-     * - `FileSystemError::IoFailure` if the file cannot be written, with details about the failure
-     */
-    func writeFile(filePath: String, fileBuffer: Data) throws 
-    
-    /**
-     * Delete a file
-     *
-     * # Errors
-     * - `FileSystemError::FileDoesNotExist` if the file does not exist
-     * - `FileSystemError::IoFailure` if the file cannot be deleted
-     */
-    func deleteFile(filePath: String) throws 
-    
-}
-/**
- * Trait representing a filesystem that can be implemented by the native side
- */
-open class FileSystemImpl: FileSystem, @unchecked Sendable {
-    fileprivate let handle: UInt64
-
-    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public struct NoHandle {
-        public init() {}
-    }
-
-    // TODO: We'd like this to be `private` but for Swifty reasons,
-    // we can't implement `FfiConverter` without making this `required` and we can't
-    // make it `required` without making it `public`.
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    required public init(unsafeFromHandle handle: UInt64) {
-        self.handle = handle
-    }
-
-    // This constructor can be used to instantiate a fake object.
-    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
-    //
-    // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public init(noHandle: NoHandle) {
-        self.handle = 0
-    }
-
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public func uniffiCloneHandle() -> UInt64 {
-        return try! rustCall { uniffi_bedrock_fn_clone_filesystem(self.handle, $0) }
-    }
-    // No primary constructor declared for this class.
-
-    deinit {
-        if handle == 0 {
-            // Mock objects have handle=0 don't try to free them
-            return
-        }
-
-        try! rustCall { uniffi_bedrock_fn_free_filesystem(handle, $0) }
-    }
-
-    
-
-    
-    /**
-     * Check if a file exists at the given path
-     *
-     * # Errors
-     * - `FileSystemError` if the operation fails
-     */
-open func fileExists(filePath: String)throws  -> Bool  {
-    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
-        uniffiCallStatus in
-    uniffi_bedrock_fn_method_filesystem_file_exists(
-            self.uniffiCloneHandle(),
-        FfiConverterString.lower(filePath),uniffiCallStatus
-    )
-})
-}
-    
-    /**
-     * Read file contents
-     *
-     * # Errors
-     * - `FileSystemError::IoFailure` if the file cannot be read
-     * - `FileSystemError::FileDoesNotExist` if the file doesn't exist
-     */
-open func readFile(filePath: String)throws  -> Data  {
-    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
-        uniffiCallStatus in
-    uniffi_bedrock_fn_method_filesystem_read_file(
-            self.uniffiCloneHandle(),
-        FfiConverterString.lower(filePath),uniffiCallStatus
-    )
-})
-}
-    
-    /**
-     * List files in a specific directory. No recursion and no subdirectories are returned.
-     *
-     * # Notes
-     * Files are returned without the directory path. Only the file name is returned.
-     *
-     * # Errors
-     * - `FileSystemError::IoFailure` if the directory cannot be listed
-     */
-open func listFilesAtDirectory(folderPath: String)throws  -> [String]  {
-    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
-        uniffiCallStatus in
-    uniffi_bedrock_fn_method_filesystem_list_files_at_directory(
-            self.uniffiCloneHandle(),
-        FfiConverterString.lower(folderPath),uniffiCallStatus
-    )
-})
-}
-    
-    /**
-     * Read a specific byte range from a file
-     *
-     * Returns up to `max_length` bytes starting at `offset`. Returns an empty vector
-     * when `offset` is at or beyond the end of the file.
-     *
-     * # Errors
-     * - `FileSystemError::IoFailure` if the file cannot be read
-     * - `FileSystemError::FileDoesNotExist` if the file doesn't exist
-     */
-open func readFileRange(filePath: String, offset: UInt64, maxLength: UInt64)throws  -> Data  {
-    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
-        uniffiCallStatus in
-    uniffi_bedrock_fn_method_filesystem_read_file_range(
-            self.uniffiCloneHandle(),
-        FfiConverterString.lower(filePath),
-        FfiConverterUInt64.lower(offset),
-        FfiConverterUInt64.lower(maxLength),uniffiCallStatus
-    )
-})
-}
-    
-    /**
-     * Write file contents
-     *
-     * # Errors
-     * - `FileSystemError::IoFailure` if the file cannot be written, with details about the failure
-     */
-open func writeFile(filePath: String, fileBuffer: Data)throws   {try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
-        uniffiCallStatus in
-    uniffi_bedrock_fn_method_filesystem_write_file(
-            self.uniffiCloneHandle(),
-        FfiConverterString.lower(filePath),
-        FfiConverterData.lower(fileBuffer),uniffiCallStatus
-    )
-}
-}
-    
-    /**
-     * Delete a file
-     *
-     * # Errors
-     * - `FileSystemError::FileDoesNotExist` if the file does not exist
-     * - `FileSystemError::IoFailure` if the file cannot be deleted
-     */
-open func deleteFile(filePath: String)throws   {try rustCallWithError(FfiConverterTypeFileSystemError_lift) {
-        uniffiCallStatus in
-    uniffi_bedrock_fn_method_filesystem_delete_file(
-            self.uniffiCloneHandle(),
-        FfiConverterString.lower(filePath),uniffiCallStatus
-    )
-}
-}
-    
-
-    
-}
-
-
-
-// Put the implementation in a struct so we don't pollute the top-level namespace
-fileprivate struct UniffiCallbackInterfaceFileSystem {
-
-    // Create the VTable using a series of closures.
-    // Swift automatically converts these into C callback functions.
-    //
-    // Store the vtable directly.
-    static let vtable: UniffiVTableCallbackInterfaceFileSystem = UniffiVTableCallbackInterfaceFileSystem(
-        uniffiFree: { (uniffiHandle: UInt64) -> () in
-            do {
-                try FfiConverterTypeFileSystem.handleMap.remove(handle: uniffiHandle)
-            } catch {
-                print("Uniffi callback interface FileSystem: handle missing in uniffiFree")
-            }
-        },
-        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
-            do {
-                return try FfiConverterTypeFileSystem.handleMap.clone(handle: uniffiHandle)
-            } catch {
-                fatalError("Uniffi callback interface FileSystem: handle missing in uniffiClone")
-            }
-        },
-        fileExists: { (
-            uniffiHandle: UInt64,
-            filePath: RustBuffer,
-            uniffiOutReturn: UnsafeMutablePointer<Int8>,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> Bool in
-                guard let uniffiObj = try? FfiConverterTypeFileSystem.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return try uniffiObj.fileExists(
-                     filePath: try FfiConverterString.lift(filePath)
-                )
-            }
-
-            
-            let writeReturn = { uniffiOutReturn.pointee = FfiConverterBool.lower($0) }
-            uniffiTraitInterfaceCallWithError(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn,
-                lowerError: FfiConverterTypeFileSystemError_lower
-            )
-        },
-        readFile: { (
-            uniffiHandle: UInt64,
-            filePath: RustBuffer,
-            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> Data in
-                guard let uniffiObj = try? FfiConverterTypeFileSystem.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return try uniffiObj.readFile(
-                     filePath: try FfiConverterString.lift(filePath)
-                )
-            }
-
-            
-            let writeReturn = { uniffiOutReturn.pointee = FfiConverterData.lower($0) }
-            uniffiTraitInterfaceCallWithError(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn,
-                lowerError: FfiConverterTypeFileSystemError_lower
-            )
-        },
-        listFilesAtDirectory: { (
-            uniffiHandle: UInt64,
-            folderPath: RustBuffer,
-            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> [String] in
-                guard let uniffiObj = try? FfiConverterTypeFileSystem.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return try uniffiObj.listFilesAtDirectory(
-                     folderPath: try FfiConverterString.lift(folderPath)
-                )
-            }
-
-            
-            let writeReturn = { uniffiOutReturn.pointee = FfiConverterSequenceString.lower($0) }
-            uniffiTraitInterfaceCallWithError(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn,
-                lowerError: FfiConverterTypeFileSystemError_lower
-            )
-        },
-        readFileRange: { (
-            uniffiHandle: UInt64,
-            filePath: RustBuffer,
-            offset: UInt64,
-            maxLength: UInt64,
-            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> Data in
-                guard let uniffiObj = try? FfiConverterTypeFileSystem.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return try uniffiObj.readFileRange(
-                     filePath: try FfiConverterString.lift(filePath),
-                     offset: try FfiConverterUInt64.lift(offset),
-                     maxLength: try FfiConverterUInt64.lift(maxLength)
-                )
-            }
-
-            
-            let writeReturn = { uniffiOutReturn.pointee = FfiConverterData.lower($0) }
-            uniffiTraitInterfaceCallWithError(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn,
-                lowerError: FfiConverterTypeFileSystemError_lower
-            )
-        },
-        writeFile: { (
-            uniffiHandle: UInt64,
-            filePath: RustBuffer,
-            fileBuffer: RustBuffer,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterTypeFileSystem.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return try uniffiObj.writeFile(
-                     filePath: try FfiConverterString.lift(filePath),
-                     fileBuffer: try FfiConverterData.lift(fileBuffer)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCallWithError(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn,
-                lowerError: FfiConverterTypeFileSystemError_lower
-            )
-        },
-        deleteFile: { (
-            uniffiHandle: UInt64,
-            filePath: RustBuffer,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterTypeFileSystem.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return try uniffiObj.deleteFile(
-                     filePath: try FfiConverterString.lift(filePath)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCallWithError(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn,
-                lowerError: FfiConverterTypeFileSystemError_lower
-            )
-        }
-    )
-
-    // Rust stores this pointer for future callback invocations, so it must live
-    // for the process lifetime (not just for the init function call).
-    //
-    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
-    // This is safe because the pointee is initialized once during static init
-    // and never mutated by either side of the FFI.  Its fields are C function pointers.
-    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceFileSystem> = {
-        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceFileSystem>.allocate(capacity: 1)
-        ptr.initialize(to: vtable)
-        return UnsafePointer(ptr)
-    }()
-}
-
-private func uniffiCallbackInitFileSystem() {
-    uniffi_bedrock_fn_init_callback_vtable_filesystem(UniffiCallbackInterfaceFileSystem.vtablePtr)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeFileSystem: FfiConverter {
-    fileprivate static let handleMap = UniffiHandleMap<FileSystem>()
-
-    typealias FfiType = UInt64
-    typealias SwiftType = FileSystem
-
-    public static func lift(_ handle: UInt64) throws -> FileSystem {
-        if ((handle & 1) == 0) {
-            // Rust-generated handle, construct a new class that uses the handle to implement the
-            // interface
-            return FileSystemImpl(unsafeFromHandle: handle)
-        } else {
-            // Swift-generated handle, get the object from the handle map
-            return try handleMap.remove(handle: handle)
-        }
-    }
-
-    public static func lower(_ value: FileSystem) -> UInt64 {
-         if let rustImpl = value as? FileSystemImpl {
-             // Rust-implemented object.  Clone the handle and return it
-            return rustImpl.uniffiCloneHandle()
-         } else {
-            // Swift object, generate a new vtable handle and return that.
-            return handleMap.insert(obj: value)
-         }
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FileSystem {
-        let handle: UInt64 = try readInt(&buf)
-        return try lift(handle)
-    }
-
-    public static func write(_ value: FileSystem, into buf: inout [UInt8]) {
-        writeInt(&buf, lower(value))
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeFileSystem_lift(_ handle: UInt64) throws -> FileSystem {
-    return try FfiConverterTypeFileSystem.lift(handle)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeFileSystem_lower(_ value: FileSystem) -> UInt64 {
-    return FfiConverterTypeFileSystem.lower(value)
-}
-
-
-
-
-
-
-/**
  * Test struct to verify filesystem middleware injection
  */
 public protocol FileSystemTesterProtocol: AnyObject, Sendable {
@@ -4448,14 +4304,15 @@ public func FfiConverterTypeKeypairSigner_lower(_ value: KeypairSigner) -> UInt6
  * Implementing the `Logger` trait:
  *
  * ```rust
+ * use std::collections::HashMap;
  *
  * use bedrock::primitives::logger::{Logger, LogLevel};
  *
  * struct MyLogger;
  *
  * impl Logger for MyLogger {
- * fn log(&self, level: LogLevel, message: String) {
- * println!("[{:?}] {}", level, message);
+ * fn log(&self, level: LogLevel, message: String, attributes: HashMap<String, String>) {
+ * println!("[{:?}] {} {:?}", level, message, attributes);
  * }
  * }
  * ```
@@ -4466,8 +4323,8 @@ public func FfiConverterTypeKeypairSigner_lower(_ value: KeypairSigner) -> UInt6
  * class BedrockCoreLoggerBridge: Bedrock.Logger {
  * static let shared = BedrockCoreLoggerBridge()
  *
- * func log(level: Bedrock.LogLevel, message: String) {
- * Log.log(level.toCoreLevel(), message)
+ * func log(level: Bedrock.LogLevel, message: String, attributes: [String: String]) {
+ * Log.log(level.toCoreLevel(), message, attributes: attributes)
  * }
  * }
  *
@@ -4482,10 +4339,12 @@ public func FfiConverterTypeKeypairSigner_lower(_ value: KeypairSigner) -> UInt6
  * return .debug
  * case .info:
  * return .info
- * case .error:
- * return .error
  * case .warn:
  * return .warn
+ * case .error:
+ * return .error
+ * case .critical:
+ * return .critical
  * }
  * }
  * }
@@ -4506,8 +4365,11 @@ public protocol Logger: AnyObject, Sendable {
      *
      * * `level` - The severity level of the log message.
      * * `message` - The log message to be recorded.
+     * * `attributes` - Structured key/value metadata for the log line. Hosts
+     * that support structured logging (e.g. Datadog) should attach these as
+     * log attributes rather than folding them into `message`.
      */
-    func log(level: LogLevel, message: String) 
+    func log(level: LogLevel, message: String, attributes: [String: String]) 
     
 }
 /**
@@ -4521,14 +4383,15 @@ public protocol Logger: AnyObject, Sendable {
  * Implementing the `Logger` trait:
  *
  * ```rust
+ * use std::collections::HashMap;
  *
  * use bedrock::primitives::logger::{Logger, LogLevel};
  *
  * struct MyLogger;
  *
  * impl Logger for MyLogger {
- * fn log(&self, level: LogLevel, message: String) {
- * println!("[{:?}] {}", level, message);
+ * fn log(&self, level: LogLevel, message: String, attributes: HashMap<String, String>) {
+ * println!("[{:?}] {} {:?}", level, message, attributes);
  * }
  * }
  * ```
@@ -4539,8 +4402,8 @@ public protocol Logger: AnyObject, Sendable {
  * class BedrockCoreLoggerBridge: Bedrock.Logger {
  * static let shared = BedrockCoreLoggerBridge()
  *
- * func log(level: Bedrock.LogLevel, message: String) {
- * Log.log(level.toCoreLevel(), message)
+ * func log(level: Bedrock.LogLevel, message: String, attributes: [String: String]) {
+ * Log.log(level.toCoreLevel(), message, attributes: attributes)
  * }
  * }
  *
@@ -4555,10 +4418,12 @@ public protocol Logger: AnyObject, Sendable {
  * return .debug
  * case .info:
  * return .info
- * case .error:
- * return .error
  * case .warn:
  * return .warn
+ * case .error:
+ * return .error
+ * case .critical:
+ * return .critical
  * }
  * }
  * }
@@ -4630,13 +4495,17 @@ open class LoggerImpl: Logger, @unchecked Sendable {
      *
      * * `level` - The severity level of the log message.
      * * `message` - The log message to be recorded.
+     * * `attributes` - Structured key/value metadata for the log line. Hosts
+     * that support structured logging (e.g. Datadog) should attach these as
+     * log attributes rather than folding them into `message`.
      */
-open func log(level: LogLevel, message: String)  {try! rustCall() {
+open func log(level: LogLevel, message: String, attributes: [String: String])  {try! rustCall() {
         uniffiCallStatus in
     uniffi_bedrock_fn_method_logger_log(
             self.uniffiCloneHandle(),
         FfiConverterTypeLogLevel_lower(level),
-        FfiConverterString.lower(message),uniffiCallStatus
+        FfiConverterString.lower(message),
+        FfiConverterDictionaryStringString.lower(attributes),uniffiCallStatus
     )
 }
 }
@@ -4673,6 +4542,7 @@ fileprivate struct UniffiCallbackInterfaceLogger {
             uniffiHandle: UInt64,
             level: RustBuffer,
             message: RustBuffer,
+            attributes: RustBuffer,
             uniffiOutReturn: UnsafeMutableRawPointer,
             uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
         ) in
@@ -4683,7 +4553,8 @@ fileprivate struct UniffiCallbackInterfaceLogger {
                 }
                 return uniffiObj.log(
                      level: try FfiConverterTypeLogLevel_lift(level),
-                     message: try FfiConverterString.lift(message)
+                     message: try FfiConverterString.lift(message),
+                     attributes: try FfiConverterDictionaryStringString.lift(attributes)
                 )
             }
 
@@ -8087,9 +7958,19 @@ public protocol ToolingDemoProtocol: AnyObject, Sendable {
     func getDemoResult()  -> String
     
     /**
+     * Log a critical message
+     */
+    func logCritical(marker: String) 
+    
+    /**
      * Logs a simple message to test log prefixing.
      */
     func logMessage(message: String) 
+    
+    /**
+     * Create a log record with additional attributes
+     */
+    func logWithAttributes(marker: String) 
     
     /**
      * Logs messages at different levels to test log prefixing.
@@ -8262,6 +8143,18 @@ open func getDemoResult() -> String  {
 }
     
     /**
+     * Log a critical message
+     */
+open func logCritical(marker: String)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_bedrock_fn_method_toolingdemo_log_critical(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(marker),uniffiCallStatus
+    )
+}
+}
+    
+    /**
      * Logs a simple message to test log prefixing.
      */
 open func logMessage(message: String)  {try! rustCall() {
@@ -8269,6 +8162,18 @@ open func logMessage(message: String)  {try! rustCall() {
     uniffi_bedrock_fn_method_toolingdemo_log_message(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(message),uniffiCallStatus
+    )
+}
+}
+    
+    /**
+     * Create a log record with additional attributes
+     */
+open func logWithAttributes(marker: String)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_bedrock_fn_method_toolingdemo_log_with_attributes(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(marker),uniffiCallStatus
     )
 }
 }
@@ -9403,6 +9308,184 @@ public func FfiConverterTypeBackupAccount_lift(_ buf: RustBuffer) throws -> Back
 #endif
 public func FfiConverterTypeBackupAccount_lower(_ value: BackupAccount) -> RustBuffer {
     return FfiConverterTypeBackupAccount.lower(value)
+}
+
+
+/**
+ * A single factor within the backup metadata.
+ */
+public struct BackupFactor: Equatable, Hashable {
+    /**
+     * Unique identifier for the factor.
+     */
+    public var id: String
+    /**
+     * Unix timestamp (seconds) when the factor was created.
+     */
+    public var createdAt: Int64
+    /**
+     * The kind of factor and its associated metadata.
+     */
+    public var kind: BackupFactorKind
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Unique identifier for the factor.
+         */id: String, 
+        /**
+         * Unix timestamp (seconds) when the factor was created.
+         */createdAt: Int64, 
+        /**
+         * The kind of factor and its associated metadata.
+         */kind: BackupFactorKind) {
+        self.id = id
+        self.createdAt = createdAt
+        self.kind = kind
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension BackupFactor: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBackupFactor: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BackupFactor {
+        return
+            try BackupFactor(
+                id: FfiConverterString.read(from: &buf), 
+                createdAt: FfiConverterInt64.read(from: &buf), 
+                kind: FfiConverterTypeBackupFactorKind.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BackupFactor, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterInt64.write(value.createdAt, into: &buf)
+        FfiConverterTypeBackupFactorKind.write(value.kind, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupFactor_lift(_ buf: RustBuffer) throws -> BackupFactor {
+    return try FfiConverterTypeBackupFactor.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupFactor_lower(_ value: BackupFactor) -> RustBuffer {
+    return FfiConverterTypeBackupFactor.lower(value)
+}
+
+
+/**
+ * Backup metadata as returned by the backup service
+ */
+public struct BackupMetadata: Equatable, Hashable {
+    /**
+     * The backup id.
+     */
+    public var id: String
+    /**
+     * Hex-encoded hash of the current backup manifest.
+     */
+    public var manifestHash: String
+    /**
+     * Encryption keys that can decrypt the backup (PRF, iCloud, Turnkey).
+     */
+    public var keys: [BackupEncryptionKey]
+    /**
+     * Main factors (passkeys, OIDC accounts) that can recover or modify the backup.
+     */
+    public var factors: [BackupFactor]
+    /**
+     * Sync factors, used to update metadata and view/delete factors.
+     */
+    public var syncFactors: [BackupFactor]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The backup id.
+         */id: String, 
+        /**
+         * Hex-encoded hash of the current backup manifest.
+         */manifestHash: String, 
+        /**
+         * Encryption keys that can decrypt the backup (PRF, iCloud, Turnkey).
+         */keys: [BackupEncryptionKey], 
+        /**
+         * Main factors (passkeys, OIDC accounts) that can recover or modify the backup.
+         */factors: [BackupFactor], 
+        /**
+         * Sync factors, used to update metadata and view/delete factors.
+         */syncFactors: [BackupFactor]) {
+        self.id = id
+        self.manifestHash = manifestHash
+        self.keys = keys
+        self.factors = factors
+        self.syncFactors = syncFactors
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension BackupMetadata: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBackupMetadata: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BackupMetadata {
+        return
+            try BackupMetadata(
+                id: FfiConverterString.read(from: &buf), 
+                manifestHash: FfiConverterString.read(from: &buf), 
+                keys: FfiConverterSequenceTypeBackupEncryptionKey.read(from: &buf), 
+                factors: FfiConverterSequenceTypeBackupFactor.read(from: &buf), 
+                syncFactors: FfiConverterSequenceTypeBackupFactor.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BackupMetadata, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.manifestHash, into: &buf)
+        FfiConverterSequenceTypeBackupEncryptionKey.write(value.keys, into: &buf)
+        FfiConverterSequenceTypeBackupFactor.write(value.factors, into: &buf)
+        FfiConverterSequenceTypeBackupFactor.write(value.syncFactors, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupMetadata_lift(_ buf: RustBuffer) throws -> BackupMetadata {
+    return try FfiConverterTypeBackupMetadata.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupMetadata_lower(_ value: BackupMetadata) -> RustBuffer {
+    return FfiConverterTypeBackupMetadata.lower(value)
 }
 
 
@@ -11264,6 +11347,121 @@ public func FfiConverterTypeWorldGiftManagerResult_lower(_ value: WorldGiftManag
 
 
 /**
+ * A backup encryption key. NOTE this only contains factor-secret-encrypted keys.
+ */
+
+public enum BackupEncryptionKey: Equatable, Hashable {
+    
+    /**
+     * Key encrypted with the user's passkey PRF.
+     */
+    case prf(
+        /**
+         * The encrypted backup key.
+         */encryptedKey: String
+    )
+    /**
+     * Key encrypted with the user's iCloud Keychain.
+     */
+    case icloud(
+        /**
+         * The encrypted backup key.
+         */encryptedKey: String
+    )
+    /**
+     * Key encrypted with a private key stored in the user's Turnkey account.
+     */
+    case turnkey(
+        /**
+         * The encrypted backup key.
+         */encryptedKey: String, 
+        /**
+         * The Turnkey sub-organization id.
+         */turnkeyAccountId: String, 
+        /**
+         * The Turnkey user id (`auth_user_main`).
+         */turnkeyUserId: String, 
+        /**
+         * The Turnkey private key id backing the encryption key.
+         */turnkeyPrivateKeyId: String
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension BackupEncryptionKey: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBackupEncryptionKey: FfiConverterRustBuffer {
+    typealias SwiftType = BackupEncryptionKey
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BackupEncryptionKey {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .prf(encryptedKey: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 2: return .icloud(encryptedKey: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 3: return .turnkey(encryptedKey: try FfiConverterString.read(from: &buf), turnkeyAccountId: try FfiConverterString.read(from: &buf), turnkeyUserId: try FfiConverterString.read(from: &buf), turnkeyPrivateKeyId: try FfiConverterString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: BackupEncryptionKey, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .prf(encryptedKey):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(encryptedKey, into: &buf)
+            
+        
+        case let .icloud(encryptedKey):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(encryptedKey, into: &buf)
+            
+        
+        case let .turnkey(encryptedKey,turnkeyAccountId,turnkeyUserId,turnkeyPrivateKeyId):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(encryptedKey, into: &buf)
+            FfiConverterString.write(turnkeyAccountId, into: &buf)
+            FfiConverterString.write(turnkeyUserId, into: &buf)
+            FfiConverterString.write(turnkeyPrivateKeyId, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupEncryptionKey_lift(_ buf: RustBuffer) throws -> BackupEncryptionKey {
+    return try FfiConverterTypeBackupEncryptionKey.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupEncryptionKey_lower(_ value: BackupEncryptionKey) -> RustBuffer {
+    return FfiConverterTypeBackupEncryptionKey.lower(value)
+}
+
+
+
+/**
  * Errors that can occur when working with backups and manifests.
  *
  * Further error documentation: <https://docs.toolsforhumanity.com/world-app/backup/components#what-the-service-rejects>
@@ -11348,6 +11546,9 @@ enum BackupError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
     case ManifestNotFound
     /**
      * File checksum does not match the expected value.
+     *
+     * Raise sites log this via `crate::critical!`; the severity lives in the log
+     * level, so the message must not carry a `[Critical]` tag.
      */
     case InvalidChecksumError(
         /**
@@ -11602,6 +11803,117 @@ public func FfiConverterTypeBackupError_lower(_ value: BackupError) -> RustBuffe
 
 
 /**
+ * The kind of a backup factor.
+ */
+
+public enum BackupFactorKind: Equatable, Hashable {
+    
+    /**
+     * A `WebAuthn` passkey, `registration` blob is intentionally omitted.
+     */
+    case passkey(
+        /**
+         * Base64url-encoded (no padding) credential id.
+         */credentialId: String, 
+        /**
+         * Human-readable label shown to the user.
+         */label: String
+    )
+    /**
+     * An OIDC account (Google or Apple) backed by a Turnkey OAuth provider.
+     */
+    case oidcAccount(
+        /**
+         * Which provider and its masked email.
+         */account: BackupOidcAccount, 
+        /**
+         * The Turnkey OAuth provider id backing this factor.
+         */turnkeyProviderId: String
+    )
+    /**
+     * An elliptic-curve keypair (a sync factor).
+     */
+    case ecKeypair(
+        /**
+         * Base64-encoded SEC1 public key.
+         */publicKey: String
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension BackupFactorKind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBackupFactorKind: FfiConverterRustBuffer {
+    typealias SwiftType = BackupFactorKind
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BackupFactorKind {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .passkey(credentialId: try FfiConverterString.read(from: &buf), label: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 2: return .oidcAccount(account: try FfiConverterTypeBackupOidcAccount.read(from: &buf), turnkeyProviderId: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 3: return .ecKeypair(publicKey: try FfiConverterString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: BackupFactorKind, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .passkey(credentialId,label):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(credentialId, into: &buf)
+            FfiConverterString.write(label, into: &buf)
+            
+        
+        case let .oidcAccount(account,turnkeyProviderId):
+            writeInt(&buf, Int32(2))
+            FfiConverterTypeBackupOidcAccount.write(account, into: &buf)
+            FfiConverterString.write(turnkeyProviderId, into: &buf)
+            
+        
+        case let .ecKeypair(publicKey):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(publicKey, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupFactorKind_lift(_ buf: RustBuffer) throws -> BackupFactorKind {
+    return try FfiConverterTypeBackupFactorKind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupFactorKind_lower(_ value: BackupFactorKind) -> RustBuffer {
+    return FfiConverterTypeBackupFactorKind.lower(value)
+}
+
+
+
+/**
  * A global identifier that identifies the type of file.
  */
 
@@ -11704,6 +12016,296 @@ public func FfiConverterTypeBackupFileDesignator_lower(_ value: BackupFileDesign
     return FfiConverterTypeBackupFileDesignator.lower(value)
 }
 
+
+
+/**
+ * Which OIDC provider backs a factor, with the user's masked email.
+ */
+
+public enum BackupOidcAccount: Equatable, Hashable {
+    
+    /**
+     * A Google account.
+     */
+    case google(
+        /**
+         * The user's masked email (e.g. `j***@gmail.com`).
+         */maskedEmail: String
+    )
+    /**
+     * An Apple account.
+     */
+    case apple(
+        /**
+         * The user's masked email.
+         */maskedEmail: String
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension BackupOidcAccount: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBackupOidcAccount: FfiConverterRustBuffer {
+    typealias SwiftType = BackupOidcAccount
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BackupOidcAccount {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .google(maskedEmail: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 2: return .apple(maskedEmail: try FfiConverterString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: BackupOidcAccount, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .google(maskedEmail):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(maskedEmail, into: &buf)
+            
+        
+        case let .apple(maskedEmail):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(maskedEmail, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupOidcAccount_lift(_ buf: RustBuffer) throws -> BackupOidcAccount {
+    return try FfiConverterTypeBackupOidcAccount.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupOidcAccount_lower(_ value: BackupOidcAccount) -> RustBuffer {
+    return FfiConverterTypeBackupOidcAccount.lower(value)
+}
+
+
+
+/**
+ * Error returned by high-level backup flows.
+ *
+ * Most variants are opaque by design (details are logged inside Bedrock).
+ */
+public 
+enum BackupOperationError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+
+    
+    
+    /**
+     * The factor provided invalid or under-permissioned. Re-authenticate and retry.
+     */
+    case NeedsReauth(
+        /**
+         * What needs to be fixed
+         */reason: NeedsReauthReason
+    )
+    /**
+     * Completing this removal would delete the entire backup because it is the last
+     * main factor. The user must confirm, then retry.
+     */
+    case WouldDeleteBackup
+    /**
+     * The backup service rejected the request. `code` is its machine-readable code.
+     */
+    case BackupService(
+        /**
+         * The backup service's machine-readable error code.
+         */code: String
+    )
+    /**
+     * The native attestation client could not produce a gateway token. It owns the
+     * exchange and the user-facing handling; Bedrock only reports that it failed.
+     */
+    case Attestation
+    /**
+     * Turnkey rejected the request. `code` is a coarse classification.
+     */
+    case Turnkey(
+        /**
+         * A coarse classification of the Turnkey failure.
+         */code: String
+    )
+    /**
+     * The signer could not produce a signature or public key.
+     */
+    case Signer(
+        /**
+         * The underlying signer failure.
+         */inner: KeypairSignerError
+    )
+    /**
+     * A network failure reaching the backup service. `retryable` indicates whether
+     * a later retry may succeed.
+     */
+    case Network(
+        /**
+         * Whether retrying the operation may succeed.
+         */retryable: Bool
+    )
+    /**
+     * The requested operation is not supported. Terminal state.
+     */
+    case Unsupported(
+        /**
+         * Human-readable description of what is unsupported.
+         */detail: String
+    )
+    /**
+     * An unexpected internal error. By default, no reason to log (Bedrock already handles it).
+     */
+    case Generic(
+        /**
+         * Additional human-readable description.
+         */errorMessage: String
+    )
+
+    
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
+}
+
+#if compiler(>=6)
+extension BackupOperationError: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBackupOperationError: FfiConverterRustBuffer {
+    typealias SwiftType = BackupOperationError
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BackupOperationError {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        
+
+        
+        case 1: return .NeedsReauth(
+            reason: try FfiConverterTypeNeedsReauthReason.read(from: &buf)
+            )
+        case 2: return .WouldDeleteBackup
+        case 3: return .BackupService(
+            code: try FfiConverterString.read(from: &buf)
+            )
+        case 4: return .Attestation
+        case 5: return .Turnkey(
+            code: try FfiConverterString.read(from: &buf)
+            )
+        case 6: return .Signer(
+            inner: try FfiConverterTypeKeypairSignerError.read(from: &buf)
+            )
+        case 7: return .Network(
+            retryable: try FfiConverterBool.read(from: &buf)
+            )
+        case 8: return .Unsupported(
+            detail: try FfiConverterString.read(from: &buf)
+            )
+        case 9: return .Generic(
+            errorMessage: try FfiConverterString.read(from: &buf)
+            )
+
+         default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: BackupOperationError, into buf: inout [UInt8]) {
+        switch value {
+
+        
+
+        
+        
+        case let .NeedsReauth(reason):
+            writeInt(&buf, Int32(1))
+            FfiConverterTypeNeedsReauthReason.write(reason, into: &buf)
+            
+        
+        case .WouldDeleteBackup:
+            writeInt(&buf, Int32(2))
+        
+        
+        case let .BackupService(code):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(code, into: &buf)
+            
+        
+        case .Attestation:
+            writeInt(&buf, Int32(4))
+        
+        
+        case let .Turnkey(code):
+            writeInt(&buf, Int32(5))
+            FfiConverterString.write(code, into: &buf)
+            
+        
+        case let .Signer(inner):
+            writeInt(&buf, Int32(6))
+            FfiConverterTypeKeypairSignerError.write(inner, into: &buf)
+            
+        
+        case let .Network(retryable):
+            writeInt(&buf, Int32(7))
+            FfiConverterBool.write(retryable, into: &buf)
+            
+        
+        case let .Unsupported(detail):
+            writeInt(&buf, Int32(8))
+            FfiConverterString.write(detail, into: &buf)
+            
+        
+        case let .Generic(errorMessage):
+            writeInt(&buf, Int32(9))
+            FfiConverterString.write(errorMessage, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupOperationError_lift(_ buf: RustBuffer) throws -> BackupOperationError {
+    return try FfiConverterTypeBackupOperationError.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupOperationError_lower(_ value: BackupOperationError) -> RustBuffer {
+    return FfiConverterTypeBackupOperationError.lower(value)
+}
 
 
 /**
@@ -12519,13 +13121,13 @@ enum FileSystemError: Swift.Error, Equatable, Hashable, Foundation.LocalizedErro
     case IoFailure(String
     )
     /**
-     * Filesystem not initialized
+     * No data directory is available because `set_config` has not been called yet
      */
     case NotInitialized
     /**
-     * Unexpected UniFFI callback error
+     * The requested path traverses outside the Bedrock data directory or names no file
      */
-    case UnexpectedUniFfiCallbackError(String
+    case InvalidPath(String
     )
 
     
@@ -12561,7 +13163,7 @@ public struct FfiConverterTypeFileSystemError: FfiConverterRustBuffer {
             try FfiConverterString.read(from: &buf)
             )
         case 3: return .NotInitialized
-        case 4: return .UnexpectedUniFfiCallbackError(
+        case 4: return .InvalidPath(
             try FfiConverterString.read(from: &buf)
             )
 
@@ -12589,7 +13191,7 @@ public struct FfiConverterTypeFileSystemError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(3))
         
         
-        case let .UnexpectedUniFfiCallbackError(v1):
+        case let .InvalidPath(v1):
             writeInt(&buf, Int32(4))
             FfiConverterString.write(v1, into: &buf)
             
@@ -13248,6 +13850,10 @@ public func FfiConverterTypeKeypairSignerError_lower(_ value: KeypairSignerError
  * Enumeration of possible log levels.
  *
  * This enum represents the severity levels that can be used when logging messages.
+ *
+ * Variants are ordered by ascending severity and **must only be appended to**:
+ * `UniFFI` transfers them by ordinal, so reordering silently remaps the severity of
+ * every record crossing the FFI boundary.
  */
 
 public enum LogLevel: Equatable, Hashable {
@@ -13272,6 +13878,13 @@ public enum LogLevel: Equatable, Hashable {
      * Designates error events that might still allow the application to continue running.
      */
     case error
+    /**
+     * Designates state that needs **immediate** attention (a corrupt manifest, an
+     * inconsistent remote account). Emitted only by [`critical`](crate::critical),
+     * and expected to carry a very low alerting threshold on the host. Usually these
+     * warrant **individual investigations**.
+     */
+    case critical
 
 
 
@@ -13303,6 +13916,8 @@ public struct FfiConverterTypeLogLevel: FfiConverterRustBuffer {
         
         case 5: return .error
         
+        case 6: return .critical
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -13329,6 +13944,10 @@ public struct FfiConverterTypeLogLevel: FfiConverterRustBuffer {
         
         case .error:
             writeInt(&buf, Int32(5))
+        
+        
+        case .critical:
+            writeInt(&buf, Int32(6))
         
         }
     }
@@ -13601,6 +14220,87 @@ public func FfiConverterTypeMigrationStatus_lift(_ buf: RustBuffer) throws -> Mi
 #endif
 public func FfiConverterTypeMigrationStatus_lower(_ value: MigrationStatus) -> RustBuffer {
     return FfiConverterTypeMigrationStatus.lower(value)
+}
+
+
+
+/**
+ * Why a factor operation needs the caller to re-authenticate before retrying.
+ *
+ * Both reasons are remediated by a native passkey ceremony; they differ in what
+ * the ceremony must produce.
+ */
+
+public enum NeedsReauthReason: Equatable, Hashable {
+    
+    /**
+     * The operation needs a [`MainFactor`] that was not supplied. The user needs to
+     * authenticate.
+     */
+    case mainFactorRequired
+    /**
+     * The sync factor is no longer valid: not registered in Turnkey, or no longer
+     * authorized by the backup service. Native must re-auth a [`MainFactor`], refresh
+     * the sync factor, and re-invoke.
+     */
+    case syncFactorInvalid
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension NeedsReauthReason: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNeedsReauthReason: FfiConverterRustBuffer {
+    typealias SwiftType = NeedsReauthReason
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NeedsReauthReason {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .mainFactorRequired
+        
+        case 2: return .syncFactorInvalid
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: NeedsReauthReason, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .mainFactorRequired:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .syncFactorInvalid:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNeedsReauthReason_lift(_ buf: RustBuffer) throws -> NeedsReauthReason {
+    return try FfiConverterTypeNeedsReauthReason.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNeedsReauthReason_lower(_ value: NeedsReauthReason) -> RustBuffer {
+    return FfiConverterTypeNeedsReauthReason.lower(value)
 }
 
 
@@ -13997,6 +14697,98 @@ public func FfiConverterTypeProcessorResult_lift(_ buf: RustBuffer) throws -> Pr
 #endif
 public func FfiConverterTypeProcessorResult_lower(_ value: ProcessorResult) -> RustBuffer {
     return FfiConverterTypeProcessorResult.lower(value)
+}
+
+
+
+/**
+ * Outcome of a successful factor removal.
+ */
+
+public enum RemoveFactorOutcome: Equatable, Hashable {
+    
+    /**
+     * The factor was removed and the backup survives; carries the refreshed
+     * metadata.
+     */
+    case factorRemoved(
+        /**
+         * Backup metadata after the removal (helps update the UI)
+         */metadata: BackupMetadata
+    )
+    /**
+     * The removed factor was the last [`MainFactor`], so the entire backup was
+     * deleted (the user had confirmed).
+     *
+     * # Native responsibilities
+     * Bedrock clears the state it owns (the local manifest and the backup event
+     * report). The sync factor lives in native secure storage and the backup it
+     * authenticated is gone, so on receiving this the caller MUST:
+     * 1. Delete its stored sync-factor keypair (iOS `keyManagementService`, Android
+     * `LocalSyncFactorStore`). Keeping it strands a credential every subsequent
+     * backup call would fail against.
+     * 2. Update whatever "backup enabled" state it shows the user.
+     */
+    case backupDeleted
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension RemoveFactorOutcome: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRemoveFactorOutcome: FfiConverterRustBuffer {
+    typealias SwiftType = RemoveFactorOutcome
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RemoveFactorOutcome {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .factorRemoved(metadata: try FfiConverterTypeBackupMetadata.read(from: &buf)
+        )
+        
+        case 2: return .backupDeleted
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: RemoveFactorOutcome, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .factorRemoved(metadata):
+            writeInt(&buf, Int32(1))
+            FfiConverterTypeBackupMetadata.write(metadata, into: &buf)
+            
+        
+        case .backupDeleted:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRemoveFactorOutcome_lift(_ buf: RustBuffer) throws -> RemoveFactorOutcome {
+    return try FfiConverterTypeRemoveFactorOutcome.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRemoveFactorOutcome_lower(_ value: RemoveFactorOutcome) -> RustBuffer {
+    return FfiConverterTypeRemoveFactorOutcome.lower(value)
 }
 
 
@@ -15905,6 +16697,31 @@ fileprivate struct FfiConverterSequenceTypeMigrationProcessor: FfiConverterRustB
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeBackupFactor: FfiConverterRustBuffer {
+    typealias SwiftType = [BackupFactor]
+
+    public static func write(_ value: [BackupFactor], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeBackupFactor.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [BackupFactor] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [BackupFactor]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeBackupFactor.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeBackupReportMainFactor: FfiConverterRustBuffer {
     typealias SwiftType = [BackupReportMainFactor]
 
@@ -15980,6 +16797,31 @@ fileprivate struct FfiConverterSequenceTypeMigrationRecordEntry: FfiConverterRus
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeBackupEncryptionKey: FfiConverterRustBuffer {
+    typealias SwiftType = [BackupEncryptionKey]
+
+    public static func write(_ value: [BackupEncryptionKey], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeBackupEncryptionKey.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [BackupEncryptionKey] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [BackupEncryptionKey]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeBackupEncryptionKey.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeBackupReportEncryptionKeyKind: FfiConverterRustBuffer {
     typealias SwiftType = [BackupReportEncryptionKeyKind]
 
@@ -15999,6 +16841,32 @@ fileprivate struct FfiConverterSequenceTypeBackupReportEncryptionKeyKind: FfiCon
             seq.append(try FfiConverterTypeBackupReportEncryptionKeyKind.read(from: &buf))
         }
         return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterDictionaryStringString: FfiConverterRustBuffer {
+    public static func write(_ value: [String: String], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for (key, value) in value {
+            FfiConverterString.write(key, into: &buf)
+            FfiConverterString.write(value, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [String: String] {
+        let len: Int32 = try readInt(&buf)
+        var dict = [String: String]()
+        dict.reserveCapacity(Int(len))
+        for _ in 0..<len {
+            let key = try FfiConverterString.read(from: &buf)
+            let value = try FfiConverterString.read(from: &buf)
+            dict[key] = value
+        }
+        return dict
     }
 }
 private let UNIFFI_RUST_FUTURE_POLL_READY: Int8 = 0
@@ -16161,6 +17029,17 @@ public func setBackupServiceApi(api: BackupServiceApi) -> Bool  {
 })
 }
 /**
+ * Sets the global attestation-token provider. Returns `false` if already set.
+ */
+public func setAttestationTokenProvider(provider: AttestationTokenProvider) -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_bedrock_fn_func_set_attestation_token_provider(
+        FfiConverterTypeAttestationTokenProvider_lower(provider),uniffiCallStatus
+    )
+})
+}
+/**
  * Gets a reference to the global Bedrock configuration.
  *
  * # Returns
@@ -16200,10 +17079,18 @@ public func isInitialized() -> Bool  {
  * Initializes the global Bedrock configuration.
  *
  * This function should be called once at application startup before any other Bedrock operations.
- * Subsequent calls will be ignored and print a warning.
+ * Every later call is refused with an error and the first configuration stands.
  *
  * # Arguments
  * * `environment` - The environment to use for all Bedrock operations
+ * * `os` - The platform the app is running on
+ * * `data_directory` - Absolute path Bedrock resolves every file against. Must be the
+ * directory the app's previous `FileSystem` implementation used, or existing backups are
+ * orphaned.
+ *
+ * # Errors
+ * - Returns an error if `data_directory` is not absolute or cannot be created.
+ * - Returns an error if Bedrock is already configured. Call only once!
  *
  * # Examples
  *
@@ -16213,35 +17100,15 @@ public func isInitialized() -> Bool  {
  * import Bedrock
  *
  * // In your app delegate or during app initialization
- * setConfig(environment: .staging)
+ * try setConfig(environment: .staging, os: .ios, rootPath: rootURL.path)
  * ```
  */
-public func setConfig(environment: BedrockEnvironment, os: Os)  {try! rustCall() {
+public func setConfig(environment: BedrockEnvironment, os: Os, dataDirectory: String)throws   {try rustCallWithError(FfiConverterTypePrimitiveError_lift) {
         uniffiCallStatus in
     uniffi_bedrock_fn_func_set_config(
         FfiConverterTypeBedrockEnvironment_lower(environment),
-        FfiConverterTypeOs_lower(os),uniffiCallStatus
-    )
-}
-}
-/**
- * Sets the global filesystem instance
- *
- * This function allows you to provide your own implementation of the `FileSystem` trait.
- * It should be called once during application initialization.
- *
- * # Arguments
- *
- * * `filesystem` - An `Arc` containing your filesystem implementation.
- *
- * # Note
- *
- * If the filesystem has already been set, this function will print a message and do nothing.
- */
-public func setFilesystem(filesystem: FileSystem)  {try! rustCall() {
-        uniffiCallStatus in
-    uniffi_bedrock_fn_func_set_filesystem(
-        FfiConverterTypeFileSystem_lower(filesystem),uniffiCallStatus
+        FfiConverterTypeOs_lower(os),
+        FfiConverterString.lower(dataDirectory),uniffiCallStatus
     )
 }
 }
@@ -16426,16 +17293,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_func_set_backup_service_api() != 13577) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_func_set_attestation_token_provider() != 54334) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_func_get_config() != 25598) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_func_is_initialized() != 2060) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_func_set_config() != 32927) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_bedrock_checksum_func_set_filesystem() != 57925) {
+    if (uniffi_bedrock_checksum_func_set_config() != 9059) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_func_get_http_client() != 7609) {
@@ -16480,7 +17347,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_backupmanager_is_local_backup_stale() != 22115) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_backupmanager_post_delete_backup() != 57272) {
+    if (uniffi_bedrock_checksum_method_backupmanager_remove_factor() != 895) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_backupmanager_retrieve_metadata() != 26823) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_backupmanager_send_event() != 36564) {
@@ -16570,28 +17440,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_bedrockaddress_as_checksummed_str() != 12340) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_method_attestationtokenprovider_attestation_token() != 17750) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_method_bedrockconfig_environment() != 34433) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_bedrockconfig_os() != 3805) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_bedrock_checksum_method_filesystem_file_exists() != 22065) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_bedrock_checksum_method_filesystem_read_file() != 51979) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_bedrock_checksum_method_filesystem_list_files_at_directory() != 15007) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_bedrock_checksum_method_filesystem_read_file_range() != 5376) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_bedrock_checksum_method_filesystem_write_file() != 58992) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_bedrock_checksum_method_filesystem_delete_file() != 800) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_authenticatedhttpclient_fetch_from_app_backend() != 32534) {
@@ -16606,7 +17461,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_devicekeyvaluestore_delete() != 27171) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_logger_log() != 36859) {
+    if (uniffi_bedrock_checksum_method_logger_log() != 14581) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_ntp_now_millis() != 42772) {
@@ -16651,7 +17506,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_toolingdemo_get_demo_result() != 21086) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_method_toolingdemo_log_critical() != 46437) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_method_toolingdemo_log_message() != 64823) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_toolingdemo_log_with_attributes() != 11174) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_toolingdemo_test_log_levels() != 34304) {
@@ -16789,7 +17650,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_constructor_bedrockaddress_new() != 8405) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_bedrockconfig_new() != 29678) {
+    if (uniffi_bedrock_checksum_constructor_bedrockconfig_new() != 57538) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_p256signer_verify() != 12309) {
@@ -16829,10 +17690,10 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
 
+    uniffiCallbackInitAttestationTokenProvider()
     uniffiCallbackInitAuthenticatedHttpClient()
     uniffiCallbackInitBackupServiceApi()
     uniffiCallbackInitDeviceKeyValueStore()
-    uniffiCallbackInitFileSystem()
     uniffiCallbackInitKeypairSigner()
     uniffiCallbackInitLogger()
     uniffiCallbackInitMigrationProcessor()
