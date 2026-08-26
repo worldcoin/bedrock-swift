@@ -10284,7 +10284,8 @@ public func FfiConverterTypeMigrationRunSummary_lower(_ value: MigrationRunSumma
  */
 public struct RetrieveMetadataResponsePayload: Equatable, Hashable {
     /**
-     * The hex-encoded manifest hash.
+     * The hex-encoded manifest hash, or an empty string when the account has
+     * no backup yet (the server's `backup_not_found` case).
      */
     public var manifestHash: String
     /**
@@ -10304,7 +10305,8 @@ public struct RetrieveMetadataResponsePayload: Equatable, Hashable {
     // declare one manually.
     public init(
         /**
-         * The hex-encoded manifest hash.
+         * The hex-encoded manifest hash, or an empty string when the account has
+         * no backup yet (the server's `backup_not_found` case).
          */manifestHash: String, 
         /**
          * Encryption keys present
