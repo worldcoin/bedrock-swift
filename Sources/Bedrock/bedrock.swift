@@ -4657,6 +4657,9 @@ public protocol ManifestManagerProtocol: AnyObject, Sendable {
      *
      * The caller must supply an HTTP client and signer to perform the gate. This method does not mutate state.
      *
+     * A missing local manifest returns an empty list when the account has no remote backup,
+     * and `RemoteAheadStaleError` when it has one (the device must restore first).
+     *
      * # Errors
      * Returns an error if the remote hash does not match local or if network/IO errors occur.
      */
@@ -4764,6 +4767,9 @@ public convenience init() {
      * Returns files recorded in the global manifest after verifying local is not stale vs remote.
      *
      * The caller must supply an HTTP client and signer to perform the gate. This method does not mutate state.
+     *
+     * A missing local manifest returns an empty list when the account has no remote backup,
+     * and `RemoteAheadStaleError` when it has one (the device must restore first).
      *
      * # Errors
      * Returns an error if the remote hash does not match local or if network/IO errors occur.
@@ -17364,7 +17370,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_backupmanager_sign_with_backup_account_key() != 1936) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_manifestmanager_list_files() != 41763) {
+    if (uniffi_bedrock_checksum_method_manifestmanager_list_files() != 58914) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_manifestmanager_remove_file() != 17096) {
@@ -17607,7 +17613,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_world_gift_manager_redeem() != 62071) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_wa_get_user_operation_receipt() != 5284) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_wa_get_user_operation_receipt() != 9182) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_send_bundler_sponsored_user_operation() != 36446) {
