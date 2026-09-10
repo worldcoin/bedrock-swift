@@ -1288,6 +1288,23 @@ public protocol BackupManagerProtocol: AnyObject, Sendable {
     func decryptAndUnpackSealedBackup(sealedBackupData: Data, encryptedBackupKeypair: String, factorSecret: String, factorType: FactorType) throws  -> DecryptedBackup
     
     /**
+     * Deletes the user's entire backup (BF-8). Clears state with the backup-service
+     * (authoritative), then Turnkey (best-effort) and the local Bedrock state.
+     *
+     * # Usage
+     * Generally only used after full World App account deletion is requested. For
+     * business-as-usual operations, [`Self::remove_factor`] is used.
+     *
+     * # Native responsibilities
+     * 1. Delete the [`SyncFactor`] stored locally.
+     *
+     * # Errors
+     * Returns [`BackupOperationError`] for processing errors. May return
+     * [`BackupOperationError::NeedsReauth`] if the [`SyncFactor`] is no longer authorized.
+     */
+    func deleteBackup(syncFactor: P256Signer, backupId: String) async throws 
+    
+    /**
      * Returns the backup account public key and fully qualified id.
      *
      * # Errors
@@ -1340,7 +1357,7 @@ public protocol BackupManagerProtocol: AnyObject, Sendable {
      * with `user_confirmed_backup_removal`) and [`BackupOperationError::NeedsReauth`]
      * (run a passkey ceremony to obtain what the reason names, then retry).
      */
-    func removeFactor(syncFactor: P256Signer, mainFactor: P256Signer?, factorId: String, userConfirmedBackupRemoval: Bool) async throws  -> RemoveFactorOutcome
+    func removeFactor(syncFactor: P256Signer, mainFactor: P256Signer?, factorId: String, userConfirmedBackupRemoval: Bool, backupId: String) async throws  -> RemoveFactorOutcome
     
     /**
      * Retrieves the user's current backup metadata.
@@ -1352,7 +1369,7 @@ public protocol BackupManagerProtocol: AnyObject, Sendable {
      * Returns [`BackupOperationError`]; an `unauthorized_factor` rejection surfaces
      * as [`BackupOperationError::NeedsReauth`].
      */
-    func retrieveMetadata(syncFactor: P256Signer) async throws  -> BackupMetadata
+    func retrieveMetadata(syncFactor: P256Signer, backupId: String) async throws  -> BackupMetadata
     
     /**
      * Send a single event by merging with base report and posting to backend.
@@ -1604,6 +1621,37 @@ open func decryptAndUnpackSealedBackup(sealedBackupData: Data, encryptedBackupKe
 }
     
     /**
+     * Deletes the user's entire backup (BF-8). Clears state with the backup-service
+     * (authoritative), then Turnkey (best-effort) and the local Bedrock state.
+     *
+     * # Usage
+     * Generally only used after full World App account deletion is requested. For
+     * business-as-usual operations, [`Self::remove_factor`] is used.
+     *
+     * # Native responsibilities
+     * 1. Delete the [`SyncFactor`] stored locally.
+     *
+     * # Errors
+     * Returns [`BackupOperationError`] for processing errors. May return
+     * [`BackupOperationError::NeedsReauth`] if the [`SyncFactor`] is no longer authorized.
+     */
+open func deleteBackup(syncFactor: P256Signer, backupId: String)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_backupmanager_delete_backup(
+                        self.uniffiCloneHandle(),FfiConverterTypeP256Signer_lower(syncFactor),FfiConverterString.lower(backupId)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_void,
+            completeFunc: ffi_bedrock_rust_future_complete_void,
+            freeFunc: ffi_bedrock_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeBackupOperationError_lift
+        )
+}
+    
+    /**
      * Returns the backup account public key and fully qualified id.
      *
      * # Errors
@@ -1672,12 +1720,12 @@ open func isLocalBackupStale(remoteManifestHash: String)throws  -> Bool  {
      * with `user_confirmed_backup_removal`) and [`BackupOperationError::NeedsReauth`]
      * (run a passkey ceremony to obtain what the reason names, then retry).
      */
-open func removeFactor(syncFactor: P256Signer, mainFactor: P256Signer?, factorId: String, userConfirmedBackupRemoval: Bool)async throws  -> RemoveFactorOutcome  {
+open func removeFactor(syncFactor: P256Signer, mainFactor: P256Signer?, factorId: String, userConfirmedBackupRemoval: Bool, backupId: String)async throws  -> RemoveFactorOutcome  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_backupmanager_remove_factor(
-                        self.uniffiCloneHandle(),FfiConverterTypeP256Signer_lower(syncFactor),FfiConverterOptionTypeP256Signer.lower(mainFactor),FfiConverterString.lower(factorId),FfiConverterBool.lower(userConfirmedBackupRemoval)
+                        self.uniffiCloneHandle(),FfiConverterTypeP256Signer_lower(syncFactor),FfiConverterOptionTypeP256Signer.lower(mainFactor),FfiConverterString.lower(factorId),FfiConverterBool.lower(userConfirmedBackupRemoval),FfiConverterString.lower(backupId)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
@@ -1698,12 +1746,12 @@ open func removeFactor(syncFactor: P256Signer, mainFactor: P256Signer?, factorId
      * Returns [`BackupOperationError`]; an `unauthorized_factor` rejection surfaces
      * as [`BackupOperationError::NeedsReauth`].
      */
-open func retrieveMetadata(syncFactor: P256Signer)async throws  -> BackupMetadata  {
+open func retrieveMetadata(syncFactor: P256Signer, backupId: String)async throws  -> BackupMetadata  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_backupmanager_retrieve_metadata(
-                        self.uniffiCloneHandle(),FfiConverterTypeP256Signer_lower(syncFactor)
+                        self.uniffiCloneHandle(),FfiConverterTypeP256Signer_lower(syncFactor),FfiConverterString.lower(backupId)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
@@ -4911,111 +4959,51 @@ public func FfiConverterTypeManifestManager_lower(_ value: ManifestManager) -> U
 
 
 /**
- * Controller that orchestrates migration execution
+ * Orchestrates migration execution, one `RecordStore` key per migration.
  *
- * ## Storage Architecture
- *
- * Each migration's state is stored independently in the [`DeviceKeyValueStore`](crate::device::DeviceKeyValueStore) using
- * a namespaced key pattern: `migration:{migration_id}`.
- *
- * For example:
- * - `migration:worldId.credentials.poh.refresh.v1`
- * - `migration:worldId.credentials.nfc.refresh.v1`
- *
- * This approach ensures:
- * - **Scalability**: No size limits on the total number of migrations
- * - **Isolation**: Each migration's state is independent and can be managed separately
- * - **Platform compatibility**: Avoids hitting single-key size limits in `SharedPreferences` (Android) and `UserDefaults` (iOS)
- *
- * Each key stores a JSON-serialized `MigrationRecord` containing execution state,
- * timestamps, and error information.
+ * See `record_store.rs` for the storage layout, `README.md` for the model.
  */
 public protocol MigrationControllerProtocol: AnyObject, Sendable {
     
     /**
-     * Delete all migration records from the key-value store.
+     * Delete all migration records, so everything runs again from scratch.
      *
-     * **Developer/testing use only.** This resets all migration state so that
-     * migrations will run again from scratch on the next `run_migrations` call.
-     *
-     * Records that don't exist yet are silently skipped.
+     * **Developer/testing use only.** Takes the lock; absent records are
+     * skipped.
      *
      * # Errors
      *
-     * Returns `MigrationError::InvalidOperation` if a migration run is currently in progress.
-     * Returns `MigrationError::DeviceKeyValueStoreError` if the underlying store fails.
-     *
-     * # Concurrency
-     *
-     * Acquires the global migration lock to prevent deleting records while
-     * migrations are in progress.
+     * `InvalidOperation` if a run is in progress, or the store failed.
      */
     func deleteAllRecords() throws  -> Int32
     
     /**
-     * List the current record for every registered processor.
-     *
-     * Returns one [`MigrationRecordEntry`] per registered processor. Processors
-     * that have never been attempted are included with status
-     * [`MigrationStatus::NotStarted`] and zero attempts. Corrupted or missing
-     * store entries are treated as a reset rather than an error.
+     * One [`MigrationRecordEntry`] per registered migration, under the lock so
+     * the snapshot is consistent. Never-attempted ones read as `NotStarted`.
      *
      * # Errors
      *
-     * Returns `MigrationError::InvalidOperation` if a migration run is currently in progress.
-     * Returns `MigrationError::DeviceKeyValueStoreError` only for unexpected store failures;
-     * missing keys and parse errors are treated as resets and do not propagate.
-     *
-     * # Concurrency
-     *
-     * Acquires the global migration lock to ensure a consistent snapshot is
-     * returned while no migration is actively modifying the records.
+     * `InvalidOperation` if a run is in progress, or the store failed.
      */
     func listAllRecords() throws  -> [MigrationRecordEntry]
     
     /**
-     * Run all registered migrations
+     * Run all registered migrations. May take seconds; network-bound.
      *
-     * This is an async call that may take several seconds depending on network
-     * conditions and the number of migrations to process.
-     *
-     * UniFFI handles the async runtime automatically via the `async_runtime = "tokio"` attribute.
-     *
-     * # Concurrency
-     *
-     * This method is **thread-safe** with fail-fast behavior. A global lock ensures only one
-     * migration run can execute at a time across all `MigrationController` instances in the process.
-     *
-     * If another migration is already in progress when this method is called, it will return
-     * immediately with an `InvalidOperation` error rather than waiting.
+     * Thread-safe and fail-fast: a concurrent run errors immediately rather
+     * than waiting on the process-wide lock.
      *
      * # Errors
      *
-     * Returns `MigrationError::InvalidOperation` if another migration run is already in progress.
-     * Returns other errors for migration execution failures (see `MigrationRunSummary` for details).
+     * `InvalidOperation` if another run is already in progress.
      */
     func runMigrations() async throws  -> MigrationRunSummary
     
 }
 /**
- * Controller that orchestrates migration execution
+ * Orchestrates migration execution, one `RecordStore` key per migration.
  *
- * ## Storage Architecture
- *
- * Each migration's state is stored independently in the [`DeviceKeyValueStore`](crate::device::DeviceKeyValueStore) using
- * a namespaced key pattern: `migration:{migration_id}`.
- *
- * For example:
- * - `migration:worldId.credentials.poh.refresh.v1`
- * - `migration:worldId.credentials.nfc.refresh.v1`
- *
- * This approach ensures:
- * - **Scalability**: No size limits on the total number of migrations
- * - **Isolation**: Each migration's state is independent and can be managed separately
- * - **Platform compatibility**: Avoids hitting single-key size limits in `SharedPreferences` (Android) and `UserDefaults` (iOS)
- *
- * Each key stores a JSON-serialized `MigrationRecord` containing execution state,
- * timestamps, and error information.
+ * See `record_store.rs` for the storage layout, `README.md` for the model.
  */
 open class MigrationController: MigrationControllerProtocol, @unchecked Sendable {
     fileprivate let handle: UInt64
@@ -5057,12 +5045,10 @@ open class MigrationController: MigrationControllerProtocol, @unchecked Sendable
         return try! rustCall { uniffi_bedrock_fn_clone_migrationcontroller(self.handle, $0) }
     }
     /**
-     * Create a new [`MigrationController`] with default processors and optional additional ones.
+     * Create a new [`MigrationController`].
      *
-     * Default processors (loaded automatically):
-     * - [`Permit2ApprovalProcessor`]: Ensures max ERC20 approval to Permit2 on `WorldChain`
-     *
-     * Additional processors passed via `additional_processors` are appended after the defaults.
+     * Runs the `additional_processors` passed in plus Bedrock's own
+     * [wallet migrations](crate::migration::wallet), which need `safe_account`.
      */
 public convenience init(kvStore: DeviceKeyValueStore, safeAccount: SafeSmartAccount?, additionalProcessors: [MigrationProcessor]) {
     let handle =
@@ -5090,22 +5076,14 @@ public convenience init(kvStore: DeviceKeyValueStore, safeAccount: SafeSmartAcco
 
     
     /**
-     * Delete all migration records from the key-value store.
+     * Delete all migration records, so everything runs again from scratch.
      *
-     * **Developer/testing use only.** This resets all migration state so that
-     * migrations will run again from scratch on the next `run_migrations` call.
-     *
-     * Records that don't exist yet are silently skipped.
+     * **Developer/testing use only.** Takes the lock; absent records are
+     * skipped.
      *
      * # Errors
      *
-     * Returns `MigrationError::InvalidOperation` if a migration run is currently in progress.
-     * Returns `MigrationError::DeviceKeyValueStoreError` if the underlying store fails.
-     *
-     * # Concurrency
-     *
-     * Acquires the global migration lock to prevent deleting records while
-     * migrations are in progress.
+     * `InvalidOperation` if a run is in progress, or the store failed.
      */
 open func deleteAllRecords()throws  -> Int32  {
     return try  FfiConverterInt32.lift(try rustCallWithError(FfiConverterTypeMigrationError_lift) {
@@ -5117,23 +5095,12 @@ open func deleteAllRecords()throws  -> Int32  {
 }
     
     /**
-     * List the current record for every registered processor.
-     *
-     * Returns one [`MigrationRecordEntry`] per registered processor. Processors
-     * that have never been attempted are included with status
-     * [`MigrationStatus::NotStarted`] and zero attempts. Corrupted or missing
-     * store entries are treated as a reset rather than an error.
+     * One [`MigrationRecordEntry`] per registered migration, under the lock so
+     * the snapshot is consistent. Never-attempted ones read as `NotStarted`.
      *
      * # Errors
      *
-     * Returns `MigrationError::InvalidOperation` if a migration run is currently in progress.
-     * Returns `MigrationError::DeviceKeyValueStoreError` only for unexpected store failures;
-     * missing keys and parse errors are treated as resets and do not propagate.
-     *
-     * # Concurrency
-     *
-     * Acquires the global migration lock to ensure a consistent snapshot is
-     * returned while no migration is actively modifying the records.
+     * `InvalidOperation` if a run is in progress, or the store failed.
      */
 open func listAllRecords()throws  -> [MigrationRecordEntry]  {
     return try  FfiConverterSequenceTypeMigrationRecordEntry.lift(try rustCallWithError(FfiConverterTypeMigrationError_lift) {
@@ -5145,25 +5112,14 @@ open func listAllRecords()throws  -> [MigrationRecordEntry]  {
 }
     
     /**
-     * Run all registered migrations
+     * Run all registered migrations. May take seconds; network-bound.
      *
-     * This is an async call that may take several seconds depending on network
-     * conditions and the number of migrations to process.
-     *
-     * UniFFI handles the async runtime automatically via the `async_runtime = "tokio"` attribute.
-     *
-     * # Concurrency
-     *
-     * This method is **thread-safe** with fail-fast behavior. A global lock ensures only one
-     * migration run can execute at a time across all `MigrationController` instances in the process.
-     *
-     * If another migration is already in progress when this method is called, it will return
-     * immediately with an `InvalidOperation` error rather than waiting.
+     * Thread-safe and fail-fast: a concurrent run errors immediately rather
+     * than waiting on the process-wide lock.
      *
      * # Errors
      *
-     * Returns `MigrationError::InvalidOperation` if another migration run is already in progress.
-     * Returns other errors for migration execution failures (see `MigrationRunSummary` for details).
+     * `InvalidOperation` if another run is already in progress.
      */
 open func runMigrations()async throws  -> MigrationRunSummary  {
     return
@@ -5232,42 +5188,28 @@ public func FfiConverterTypeMigrationController_lower(_ value: MigrationControll
 
 
 /**
- * Trait that all migration processors must implement
+ * A migration implemented by the host platform, in Swift or Kotlin.
  *
- * # Timeouts and Cancellation Safety
+ * # Blocking and idempotency
  *
- * Both [`is_applicable`](Self::is_applicable) and [`execute`](Self::execute) are subject to timeouts
- * (20 seconds in production). When a timeout occurs, the future is dropped and the migration
- * is marked as failed (for `execute`) or skipped (for `is_applicable`).
+ * Nothing bounds how long these may take. The run is off the app-start path,
+ * but it holds the migration lock, so a slow method stalls the whole run and
+ * every migration sharing its task. Implementations:
  *
- * **IMPORTANT**: Implementations MUST be cancellation-safe:
- *
- * - **DO NOT** spawn background tasks using `tokio::spawn`, `std::thread::spawn`, or similar
- * that will continue running after the timeout
- * - **DO NOT** use blocking operations or FFI calls without proper cleanup
- * - **ENSURE** all work stops when the future is dropped (cooperative cancellation)
- * - **MAKE** migrations idempotent so partial execution can be safely retried
-
+ * - MUST NOT block the thread or call FFI without cleanup
+ * - MUST NOT spawn work that outlives the returned future
+ * - MUST be idempotent, since partial work is retried
  */
 public protocol MigrationProcessor: AnyObject, Sendable {
     
     /**
-     * Unique identifier for this migration (e.g., "worldid.account.bootstrap.v1")
-     * The version should be included in the ID itself (e.g., ".v1", ".v2")
+     * Unique identifier, version included (e.g. `"worldid.account.bootstrap.v1"`).
      */
     func migrationId()  -> String
     
     /**
-     * Check if this migration is applicable
-     *
-     * This method should check **actual state** (e.g., does v4 credential exist?)
-     * to determine if the migration needs to run. This ensures the system is
-     * truly idempotent and handles edge cases gracefully.
-     *
-     * # Returns
-     * - `Ok(true)` if the migration should run
-     * - `Ok(false)` if the migration should be skipped
-     * - `Err(_)` if unable to determine (migration will be skipped with error logged)
+     * Should this migration run? Check **actual state**, so the decision stays
+     * idempotent. `Err` skips the migration with the error logged.
      */
     func isApplicable() async throws  -> Bool
     
@@ -5278,22 +5220,17 @@ public protocol MigrationProcessor: AnyObject, Sendable {
     
 }
 /**
- * Trait that all migration processors must implement
+ * A migration implemented by the host platform, in Swift or Kotlin.
  *
- * # Timeouts and Cancellation Safety
+ * # Blocking and idempotency
  *
- * Both [`is_applicable`](Self::is_applicable) and [`execute`](Self::execute) are subject to timeouts
- * (20 seconds in production). When a timeout occurs, the future is dropped and the migration
- * is marked as failed (for `execute`) or skipped (for `is_applicable`).
+ * Nothing bounds how long these may take. The run is off the app-start path,
+ * but it holds the migration lock, so a slow method stalls the whole run and
+ * every migration sharing its task. Implementations:
  *
- * **IMPORTANT**: Implementations MUST be cancellation-safe:
- *
- * - **DO NOT** spawn background tasks using `tokio::spawn`, `std::thread::spawn`, or similar
- * that will continue running after the timeout
- * - **DO NOT** use blocking operations or FFI calls without proper cleanup
- * - **ENSURE** all work stops when the future is dropped (cooperative cancellation)
- * - **MAKE** migrations idempotent so partial execution can be safely retried
-
+ * - MUST NOT block the thread or call FFI without cleanup
+ * - MUST NOT spawn work that outlives the returned future
+ * - MUST be idempotent, since partial work is retried
  */
 open class MigrationProcessorImpl: MigrationProcessor, @unchecked Sendable {
     fileprivate let handle: UInt64
@@ -5349,8 +5286,7 @@ open class MigrationProcessorImpl: MigrationProcessor, @unchecked Sendable {
 
     
     /**
-     * Unique identifier for this migration (e.g., "worldid.account.bootstrap.v1")
-     * The version should be included in the ID itself (e.g., ".v1", ".v2")
+     * Unique identifier, version included (e.g. `"worldid.account.bootstrap.v1"`).
      */
 open func migrationId() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
@@ -5362,16 +5298,8 @@ open func migrationId() -> String  {
 }
     
     /**
-     * Check if this migration is applicable
-     *
-     * This method should check **actual state** (e.g., does v4 credential exist?)
-     * to determine if the migration needs to run. This ensures the system is
-     * truly idempotent and handles edge cases gracefully.
-     *
-     * # Returns
-     * - `Ok(true)` if the migration should run
-     * - `Ok(false)` if the migration should be skipped
-     * - `Err(_)` if unable to determine (migration will be skipped with error logged)
+     * Should this migration run? Check **actual state**, so the decision stays
+     * idempotent. `Err` skips the migration with the error logged.
      */
 open func isApplicable()async throws  -> Bool  {
     return
@@ -6160,10 +6088,12 @@ public func FfiConverterTypeRootKey_lower(_ value: RootKey) -> UInt64 {
 
 
 /**
- * Migration processor that repairs the ERC-4337 configuration of a Safe that
- * was deployed without the [`GNOSIS_SAFE_4337_MODULE`].
+ * Repairs the ERC-4337 configuration of a Safe deployed without the module.
  *
- * [`GNOSIS_SAFE_4337_MODULE`]: crate::smart_account::GNOSIS_SAFE_4337_MODULE
+ * **Deprecated and inert.** The repair is now a wallet migration the
+ * controller runs automatically, proven by on-chain state rather than by a
+ * processor's own word. This type is kept only so the released FFI surface
+ * does not break; registering it does nothing.
  */
 public protocol Safe4337ModuleProcessorProtocol: AnyObject, Sendable {
     
@@ -6172,15 +6102,19 @@ public protocol Safe4337ModuleProcessorProtocol: AnyObject, Sendable {
      * be registered with
      * [`MigrationController`](crate::migration::MigrationController) via its
      * `additional_processors` argument.
+     *
+     * **Deprecated and inert**, see the type docs.
      */
     func asMigrationProcessor()  -> MigrationProcessor
     
 }
 /**
- * Migration processor that repairs the ERC-4337 configuration of a Safe that
- * was deployed without the [`GNOSIS_SAFE_4337_MODULE`].
+ * Repairs the ERC-4337 configuration of a Safe deployed without the module.
  *
- * [`GNOSIS_SAFE_4337_MODULE`]: crate::smart_account::GNOSIS_SAFE_4337_MODULE
+ * **Deprecated and inert.** The repair is now a wallet migration the
+ * controller runs automatically, proven by on-chain state rather than by a
+ * processor's own word. This type is kept only so the released FFI surface
+ * does not break; registering it does nothing.
  */
 open class Safe4337ModuleProcessor: Safe4337ModuleProcessorProtocol, @unchecked Sendable {
     fileprivate let handle: UInt64
@@ -6224,6 +6158,9 @@ open class Safe4337ModuleProcessor: Safe4337ModuleProcessorProtocol, @unchecked 
     /**
      * Creates a processor that repairs the ERC-4337 configuration of
      * `safe_account` (on World Chain).
+     *
+     * **Deprecated and inert**, see the type docs. Nothing needs to be
+     * registered: the controller runs the repair itself.
      */
 public convenience init(safeAccount: SafeSmartAccount) {
     let handle =
@@ -6253,6 +6190,8 @@ public convenience init(safeAccount: SafeSmartAccount) {
      * be registered with
      * [`MigrationController`](crate::migration::MigrationController) via its
      * `additional_processors` argument.
+     *
+     * **Deprecated and inert**, see the type docs.
      */
 open func asMigrationProcessor() -> MigrationProcessor  {
     return try!  FfiConverterTypeMigrationProcessor_lift(try! rustCall() {
@@ -10050,12 +9989,9 @@ public func FfiConverterTypeManifestDebug_lower(_ value: ManifestDebug) -> RustB
 
 
 /**
- * A single migration record entry returned by [`MigrationController::list_all_records`].
+ * FFI-facing view of a [`MigrationRecord`], keyed by migration ID.
  *
- * FFI-facing view of a migration's persisted execution state, combining the
- * processor's migration ID with the fields from [`MigrationRecord`] that are
- * relevant to external consumers.
-
+ * Internal-only fields (`recheck_at`, `last_submission`) are not exposed.
  */
 public struct MigrationRecordEntry: Equatable, Hashable {
     /**
@@ -10207,6 +10143,11 @@ public struct MigrationRunSummary: Equatable, Hashable {
      * Number of migrations that were skipped (already completed or not applicable)
      */
     public var skipped: Int32
+    /**
+     * Number of migrations that submitted fire-and-forget work and remain in
+     * progress; completion is proven on a later run by re-reading on-chain state
+     */
+    public var pending: Int32
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -10225,12 +10166,17 @@ public struct MigrationRunSummary: Equatable, Hashable {
          */failedTerminal: Int32, 
         /**
          * Number of migrations that were skipped (already completed or not applicable)
-         */skipped: Int32) {
+         */skipped: Int32, 
+        /**
+         * Number of migrations that submitted fire-and-forget work and remain in
+         * progress; completion is proven on a later run by re-reading on-chain state
+         */pending: Int32) {
         self.total = total
         self.succeeded = succeeded
         self.failedRetryable = failedRetryable
         self.failedTerminal = failedTerminal
         self.skipped = skipped
+        self.pending = pending
     }
 
     
@@ -10253,7 +10199,8 @@ public struct FfiConverterTypeMigrationRunSummary: FfiConverterRustBuffer {
                 succeeded: FfiConverterInt32.read(from: &buf), 
                 failedRetryable: FfiConverterInt32.read(from: &buf), 
                 failedTerminal: FfiConverterInt32.read(from: &buf), 
-                skipped: FfiConverterInt32.read(from: &buf)
+                skipped: FfiConverterInt32.read(from: &buf), 
+                pending: FfiConverterInt32.read(from: &buf)
         )
     }
 
@@ -10263,6 +10210,7 @@ public struct FfiConverterTypeMigrationRunSummary: FfiConverterRustBuffer {
         FfiConverterInt32.write(value.failedRetryable, into: &buf)
         FfiConverterInt32.write(value.failedTerminal, into: &buf)
         FfiConverterInt32.write(value.skipped, into: &buf)
+        FfiConverterInt32.write(value.pending, into: &buf)
     }
 }
 
@@ -12124,6 +12072,10 @@ enum BackupOperationError: Swift.Error, Equatable, Hashable, Foundation.Localize
     
     
     /**
+     * The total operation timed out (including retries). Terminal.
+     */
+    case Timeout
+    /**
      * The factor provided invalid or under-permissioned. Re-authenticate and retry.
      */
     case NeedsReauth(
@@ -12183,6 +12135,14 @@ enum BackupOperationError: Swift.Error, Equatable, Hashable, Foundation.Localize
          */detail: String
     )
     /**
+     * The provided `factor_id` is invalid.
+     */
+    case InvalidFactorId
+    /**
+     * There's some discrepancy or inconsistency that cannot be manually resolved. Can't continue.
+     */
+    case Consistency
+    /**
      * An unexpected internal error. By default, no reason to log (Bedrock already handles it).
      */
     case Generic(
@@ -12219,27 +12179,30 @@ public struct FfiConverterTypeBackupOperationError: FfiConverterRustBuffer {
         
 
         
-        case 1: return .NeedsReauth(
+        case 1: return .Timeout
+        case 2: return .NeedsReauth(
             reason: try FfiConverterTypeNeedsReauthReason.read(from: &buf)
             )
-        case 2: return .WouldDeleteBackup
-        case 3: return .BackupService(
+        case 3: return .WouldDeleteBackup
+        case 4: return .BackupService(
             code: try FfiConverterString.read(from: &buf)
             )
-        case 4: return .Attestation
-        case 5: return .Turnkey(
+        case 5: return .Attestation
+        case 6: return .Turnkey(
             code: try FfiConverterString.read(from: &buf)
             )
-        case 6: return .Signer(
+        case 7: return .Signer(
             inner: try FfiConverterTypeKeypairSignerError.read(from: &buf)
             )
-        case 7: return .Network(
+        case 8: return .Network(
             retryable: try FfiConverterBool.read(from: &buf)
             )
-        case 8: return .Unsupported(
+        case 9: return .Unsupported(
             detail: try FfiConverterString.read(from: &buf)
             )
-        case 9: return .Generic(
+        case 10: return .InvalidFactorId
+        case 11: return .Consistency
+        case 12: return .Generic(
             errorMessage: try FfiConverterString.read(from: &buf)
             )
 
@@ -12254,46 +12217,58 @@ public struct FfiConverterTypeBackupOperationError: FfiConverterRustBuffer {
 
         
         
-        case let .NeedsReauth(reason):
+        case .Timeout:
             writeInt(&buf, Int32(1))
+        
+        
+        case let .NeedsReauth(reason):
+            writeInt(&buf, Int32(2))
             FfiConverterTypeNeedsReauthReason.write(reason, into: &buf)
             
         
         case .WouldDeleteBackup:
-            writeInt(&buf, Int32(2))
+            writeInt(&buf, Int32(3))
         
         
         case let .BackupService(code):
-            writeInt(&buf, Int32(3))
+            writeInt(&buf, Int32(4))
             FfiConverterString.write(code, into: &buf)
             
         
         case .Attestation:
-            writeInt(&buf, Int32(4))
+            writeInt(&buf, Int32(5))
         
         
         case let .Turnkey(code):
-            writeInt(&buf, Int32(5))
+            writeInt(&buf, Int32(6))
             FfiConverterString.write(code, into: &buf)
             
         
         case let .Signer(inner):
-            writeInt(&buf, Int32(6))
+            writeInt(&buf, Int32(7))
             FfiConverterTypeKeypairSignerError.write(inner, into: &buf)
             
         
         case let .Network(retryable):
-            writeInt(&buf, Int32(7))
+            writeInt(&buf, Int32(8))
             FfiConverterBool.write(retryable, into: &buf)
             
         
         case let .Unsupported(detail):
-            writeInt(&buf, Int32(8))
+            writeInt(&buf, Int32(9))
             FfiConverterString.write(detail, into: &buf)
             
         
+        case .InvalidFactorId:
+            writeInt(&buf, Int32(10))
+        
+        
+        case .Consistency:
+            writeInt(&buf, Int32(11))
+        
+        
         case let .Generic(errorMessage):
-            writeInt(&buf, Int32(9))
+            writeInt(&buf, Int32(12))
             FfiConverterString.write(errorMessage, into: &buf)
             
         }
@@ -12427,6 +12402,10 @@ public enum BackupReportEventKind: Equatable, Hashable {
      * Triggered after verification of a login method (eensures user still has full access to their account)
      */
     case methodVerification
+    /**
+     * Delete the entire backup
+     */
+    case delete
 
 
 
@@ -12458,6 +12437,8 @@ public struct FfiConverterTypeBackupReportEventKind: FfiConverterRustBuffer {
         
         case 5: return .methodVerification
         
+        case 6: return .delete
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -12484,6 +12465,10 @@ public struct FfiConverterTypeBackupReportEventKind: FfiConverterRustBuffer {
         
         case .methodVerification:
             writeInt(&buf, Int32(5))
+        
+        
+        case .delete:
+            writeInt(&buf, Int32(6))
         
         }
     }
@@ -14128,29 +14113,30 @@ public func FfiConverterTypeMigrationError_lower(_ value: MigrationError) -> Rus
 
 
 /**
- * Status of a single migration
+ * Status of a single migration.
  */
 
 public enum MigrationStatus: Equatable, Hashable {
     
     /**
-     * Migration has not been started yet
+     * Never attempted.
      */
     case notStarted
     /**
-     * Migration is currently in progress
+     * In progress. For a wallet migration: submitted, not yet seen on chain.
      */
     case inProgress
     /**
-     * Migration completed successfully
+     * Done. For a wallet migration: the end state was observed this launch,
+     * which can drift back — unlike a processor's own word, taken on trust.
      */
     case succeeded
     /**
-     * Migration failed but can be retried
+     * Failed; retried next launch.
      */
     case failedRetryable
     /**
-     * Migration failed with terminal error (won't retry)
+     * Failed terminally. Never attempted again.
      */
     case failedTerminal
 
@@ -14247,9 +14233,12 @@ public enum NeedsReauthReason: Equatable, Hashable {
      */
     case mainFactorRequired
     /**
-     * The sync factor is no longer valid: not registered in Turnkey, or no longer
-     * authorized by the backup service. Native must re-auth a [`MainFactor`], refresh
-     * the sync factor, and re-invoke.
+     * Provided [`MainFactor`] is not valid (either Turnkey or backup-service). Rare.
+     */
+    case mainFactorInvalid
+    /**
+     * Provided [`SyncFactor`] is not valid (either Turnkey or backup-service). Can be
+     * fixed with a [`MainFactor`] re-auth.
      */
     case syncFactorInvalid
 
@@ -14275,7 +14264,9 @@ public struct FfiConverterTypeNeedsReauthReason: FfiConverterRustBuffer {
         
         case 1: return .mainFactorRequired
         
-        case 2: return .syncFactorInvalid
+        case 2: return .mainFactorInvalid
+        
+        case 3: return .syncFactorInvalid
         
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -14289,8 +14280,12 @@ public struct FfiConverterTypeNeedsReauthReason: FfiConverterRustBuffer {
             writeInt(&buf, Int32(1))
         
         
-        case .syncFactorInvalid:
+        case .mainFactorInvalid:
             writeInt(&buf, Int32(2))
+        
+        
+        case .syncFactorInvalid:
+            writeInt(&buf, Int32(3))
         
         }
     }
@@ -14605,7 +14600,7 @@ public func FfiConverterTypePrimitiveError_lower(_ value: PrimitiveError) -> Rus
 
 
 /**
- * Result of executing a migration processor
+ * Result of executing a [`MigrationProcessor`].
  */
 
 public enum ProcessorResult: Equatable, Hashable {
@@ -14716,25 +14711,19 @@ public func FfiConverterTypeProcessorResult_lower(_ value: ProcessorResult) -> R
 public enum RemoveFactorOutcome: Equatable, Hashable {
     
     /**
-     * The factor was removed and the backup survives; carries the refreshed
-     * metadata.
+     * The factor was removed, returns the updated backup metadata.
      */
     case factorRemoved(
         /**
-         * Backup metadata after the removal (helps update the UI)
+         * Updated backup metadata (helps update the UI)
          */metadata: BackupMetadata
     )
     /**
      * The removed factor was the last [`MainFactor`], so the entire backup was
-     * deleted (the user had confirmed).
+     * deleted.
      *
      * # Native responsibilities
-     * Bedrock clears the state it owns (the local manifest and the backup event
-     * report). The sync factor lives in native secure storage and the backup it
-     * authenticated is gone, so on receiving this the caller MUST:
-     * 1. Delete its stored sync-factor keypair (iOS `keyManagementService`, Android
-     * `LocalSyncFactorStore`). Keeping it strands a credential every subsequent
-     * backup call would fail against.
+     * 1. Delete its stored [`SyncFactor`] keypair.
      * 2. Update whatever "backup enabled" state it shows the user.
      */
     case backupDeleted
@@ -17349,16 +17338,19 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_backupmanager_decrypt_and_unpack_sealed_backup() != 12457) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_method_backupmanager_delete_backup() != 49560) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_method_backupmanager_get_backup_account() != 8461) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_backupmanager_is_local_backup_stale() != 22115) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_backupmanager_remove_factor() != 895) {
+    if (uniffi_bedrock_checksum_method_backupmanager_remove_factor() != 232) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_backupmanager_retrieve_metadata() != 26823) {
+    if (uniffi_bedrock_checksum_method_backupmanager_retrieve_metadata() != 13962) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_backupmanager_send_event() != 36564) {
@@ -17406,25 +17398,25 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_turnkeymanager_run_migrations() != 64849) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_migrationcontroller_delete_all_records() != 39239) {
+    if (uniffi_bedrock_checksum_method_migrationcontroller_delete_all_records() != 49345) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_migrationcontroller_list_all_records() != 24696) {
+    if (uniffi_bedrock_checksum_method_migrationcontroller_list_all_records() != 31798) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_migrationcontroller_run_migrations() != 62787) {
+    if (uniffi_bedrock_checksum_method_migrationcontroller_run_migrations() != 55114) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_migrationprocessor_migration_id() != 26747) {
+    if (uniffi_bedrock_checksum_method_migrationprocessor_migration_id() != 53654) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_migrationprocessor_is_applicable() != 29705) {
+    if (uniffi_bedrock_checksum_method_migrationprocessor_is_applicable() != 46562) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_migrationprocessor_execute() != 15454) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safe4337moduleprocessor_as_migration_processor() != 17567) {
+    if (uniffi_bedrock_checksum_method_safe4337moduleprocessor_as_migration_processor() != 4450) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_enclaveattestationverifier_verify_attestation_document_and_encrypt() != 47493) {
@@ -17643,10 +17635,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_constructor_turnkeymanager_new() != 38903) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_migrationcontroller_new() != 43548) {
+    if (uniffi_bedrock_checksum_constructor_migrationcontroller_new() != 48275) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_constructor_safe4337moduleprocessor_new() != 16858) {
+    if (uniffi_bedrock_checksum_constructor_safe4337moduleprocessor_new() != 13637) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_enclaveattestationverifier_new() != 54250) {
