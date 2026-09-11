@@ -5897,6 +5897,118 @@ public func FfiConverterTypeP256Signer_lower(_ value: P256Signer) -> UInt64 {
 
 
 /**
+ * An unsigned World Chain `UserOperation` prepared for review before signing.
+ */
+public protocol PreparedTransactionProtocol: AnyObject, Sendable {
+    
+}
+/**
+ * An unsigned World Chain `UserOperation` prepared for review before signing.
+ */
+open class PreparedTransaction: PreparedTransactionProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_bedrock_fn_clone_preparedtransaction(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_bedrock_fn_free_preparedtransaction(handle, $0) }
+    }
+
+    
+
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePreparedTransaction: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = PreparedTransaction
+
+    public static func lift(_ handle: UInt64) throws -> PreparedTransaction {
+        return PreparedTransaction(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: PreparedTransaction) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PreparedTransaction {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: PreparedTransaction, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePreparedTransaction_lift(_ handle: UInt64) throws -> PreparedTransaction {
+    return try FfiConverterTypePreparedTransaction.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePreparedTransaction_lower(_ value: PreparedTransaction) -> UInt64 {
+    return FfiConverterTypePreparedTransaction.lower(value)
+}
+
+
+
+
+
+
+/**
  * The `RootKey` is a 32-byte secret key from which other keys are derived for use throughout World App.
  *
  * Debug trait is safe because the key is stored in a `SecretBox`.
@@ -6382,6 +6494,33 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
     func asEip191Signer()  -> Eip191Signer
     
     /**
+     * Prepares an unsigned ERC-20 transfer on World Chain.
+     *
+     * # Arguments
+     * - `token_address`: The address of the ERC-20 token to transfer.
+     * - `to_address`: The address of the recipient.
+     * - `amount`: The amount of tokens to transfer as a stringified integer with the decimals of the token (e.g. 18 for USDC or WLD)
+     * - `transfer_association`: Metadata value. The association of the transfer.
+     *
+     * # Errors
+     * - Will throw a parsing error if any of the provided attributes are invalid.
+     * - Will throw an RPC error if sponsorship preparation fails.
+     * - Will throw an error if sponsorship is declined.
+     * - Will throw an error if the global HTTP client has not been initialized.
+     */
+    func prepareTransactionTransfer(tokenAddress: String, toAddress: String, amount: String, transferAssociation: TransferAssociation?) async throws  -> PreparedTransaction
+    
+    /**
+     * Signs and submits a previously prepared transaction on World Chain.
+     *
+     * # Errors
+     * - Will throw an error if the transaction was prepared for another account.
+     * - Will throw an RPC error if signing or submission fails.
+     * - Will throw an error if the global HTTP client has not been initialized.
+     */
+    func submitPreparedTransaction(preparedTransaction: PreparedTransaction) async throws  -> HexEncodedData
+    
+    /**
      * Deposits tokens into an ERC4626 vault on World Chain.
      *
      * This method uses the generic ERC4626 implementation that queries the vault's
@@ -6450,49 +6589,6 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
      * - Will throw an error if the global HTTP client has not been initialized.
      */
     func transactionPermit2Approve(tokenAddress: String, spenderAddress: String, amount: String, expiration: String) async throws  -> HexEncodedData
-    
-    /**
-     * Allows executing an ERC-20 token transfer **on World Chain**.
-     *
-     * # Arguments
-     * - `token_address`: The address of the ERC-20 token to transfer.
-     * - `to_address`: The address of the recipient.
-     * - `amount`: The amount of tokens to transfer as a stringified integer with the decimals of the token (e.g. 18 for USDC or WLD)
-     * - `transfer_association`: Metadata value. The association of the transfer.
-     *
-     * # Example
-     *
-     * ```no_run
-     * use std::sync::Arc;
-     * use bedrock::smart_account::{SafeSmartAccount, SmartAccountKeyManager};
-     * use bedrock::transactions::TransactionError;
-     * use bedrock::primitives::Network;
-     *
-     * # async fn example(
-     * #     key_manager: Arc<dyn SmartAccountKeyManager>,
-     * # ) -> Result<(), TransactionError> {
-     * // Assume we have a configured SafeSmartAccount
-     * # let safe_account = SafeSmartAccount::new(key_manager, "0x1234567890123456789012345678901234567890").unwrap();
-     *
-     * // Transfer USDC on World Chain
-     * let tx_hash = safe_account.transaction_transfer(
-     * "0x79A02482A880BCE3F13E09Da970dC34DB4cD24d1", // USDC on World Chain
-     * "0x1234567890123456789012345678901234567890",
-     * "1000000", // 1 USDC (6 decimals)
-     * None,
-     * ).await?;
-     *
-     * println!("Transaction hash: {}", tx_hash.to_hex_string());
-     * # Ok(())
-     * # }
-     * ```
-     *
-     * # Errors
-     * - Will throw a parsing error if any of the provided attributes are invalid.
-     * - Will throw an RPC error if the transaction submission fails.
-     * - Will throw an error if the global HTTP client has not been initialized.
-     */
-    func transactionTransfer(tokenAddress: String, toAddress: String, amount: String, transferAssociation: TransferAssociation?) async throws  -> HexEncodedData
     
     /**
      * Migrates assets from a USD Vault to an ERC4626 vault on World Chain.
@@ -6874,6 +6970,61 @@ open func asEip191Signer() -> Eip191Signer  {
 }
     
     /**
+     * Prepares an unsigned ERC-20 transfer on World Chain.
+     *
+     * # Arguments
+     * - `token_address`: The address of the ERC-20 token to transfer.
+     * - `to_address`: The address of the recipient.
+     * - `amount`: The amount of tokens to transfer as a stringified integer with the decimals of the token (e.g. 18 for USDC or WLD)
+     * - `transfer_association`: Metadata value. The association of the transfer.
+     *
+     * # Errors
+     * - Will throw a parsing error if any of the provided attributes are invalid.
+     * - Will throw an RPC error if sponsorship preparation fails.
+     * - Will throw an error if sponsorship is declined.
+     * - Will throw an error if the global HTTP client has not been initialized.
+     */
+open func prepareTransactionTransfer(tokenAddress: String, toAddress: String, amount: String, transferAssociation: TransferAssociation?)async throws  -> PreparedTransaction  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_safesmartaccount_prepare_transaction_transfer(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(tokenAddress),FfiConverterString.lower(toAddress),FfiConverterString.lower(amount),FfiConverterOptionTypeTransferAssociation.lower(transferAssociation)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_u64,
+            completeFunc: ffi_bedrock_rust_future_complete_u64,
+            freeFunc: ffi_bedrock_rust_future_free_u64,
+            liftFunc: FfiConverterTypePreparedTransaction_lift,
+            errorHandler: FfiConverterTypeTransactionError_lift
+        )
+}
+    
+    /**
+     * Signs and submits a previously prepared transaction on World Chain.
+     *
+     * # Errors
+     * - Will throw an error if the transaction was prepared for another account.
+     * - Will throw an RPC error if signing or submission fails.
+     * - Will throw an error if the global HTTP client has not been initialized.
+     */
+open func submitPreparedTransaction(preparedTransaction: PreparedTransaction)async throws  -> HexEncodedData  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_safesmartaccount_submit_prepared_transaction(
+                        self.uniffiCloneHandle(),FfiConverterTypePreparedTransaction_lower(preparedTransaction)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_u64,
+            completeFunc: ffi_bedrock_rust_future_complete_u64,
+            freeFunc: ffi_bedrock_rust_future_free_u64,
+            liftFunc: FfiConverterTypeHexEncodedData_lift,
+            errorHandler: FfiConverterTypeTransactionError_lift
+        )
+}
+    
+    /**
      * Deposits tokens into an ERC4626 vault on World Chain.
      *
      * This method uses the generic ERC4626 implementation that queries the vault's
@@ -6989,63 +7140,6 @@ open func transactionPermit2Approve(tokenAddress: String, spenderAddress: String
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_safesmartaccount_transaction_permit2_approve(
                         self.uniffiCloneHandle(),FfiConverterString.lower(tokenAddress),FfiConverterString.lower(spenderAddress),FfiConverterString.lower(amount),FfiConverterString.lower(expiration)
-                )
-            },
-            pollFunc: ffi_bedrock_rust_future_poll_u64,
-            completeFunc: ffi_bedrock_rust_future_complete_u64,
-            freeFunc: ffi_bedrock_rust_future_free_u64,
-            liftFunc: FfiConverterTypeHexEncodedData_lift,
-            errorHandler: FfiConverterTypeTransactionError_lift
-        )
-}
-    
-    /**
-     * Allows executing an ERC-20 token transfer **on World Chain**.
-     *
-     * # Arguments
-     * - `token_address`: The address of the ERC-20 token to transfer.
-     * - `to_address`: The address of the recipient.
-     * - `amount`: The amount of tokens to transfer as a stringified integer with the decimals of the token (e.g. 18 for USDC or WLD)
-     * - `transfer_association`: Metadata value. The association of the transfer.
-     *
-     * # Example
-     *
-     * ```no_run
-     * use std::sync::Arc;
-     * use bedrock::smart_account::{SafeSmartAccount, SmartAccountKeyManager};
-     * use bedrock::transactions::TransactionError;
-     * use bedrock::primitives::Network;
-     *
-     * # async fn example(
-     * #     key_manager: Arc<dyn SmartAccountKeyManager>,
-     * # ) -> Result<(), TransactionError> {
-     * // Assume we have a configured SafeSmartAccount
-     * # let safe_account = SafeSmartAccount::new(key_manager, "0x1234567890123456789012345678901234567890").unwrap();
-     *
-     * // Transfer USDC on World Chain
-     * let tx_hash = safe_account.transaction_transfer(
-     * "0x79A02482A880BCE3F13E09Da970dC34DB4cD24d1", // USDC on World Chain
-     * "0x1234567890123456789012345678901234567890",
-     * "1000000", // 1 USDC (6 decimals)
-     * None,
-     * ).await?;
-     *
-     * println!("Transaction hash: {}", tx_hash.to_hex_string());
-     * # Ok(())
-     * # }
-     * ```
-     *
-     * # Errors
-     * - Will throw a parsing error if any of the provided attributes are invalid.
-     * - Will throw an RPC error if the transaction submission fails.
-     * - Will throw an error if the global HTTP client has not been initialized.
-     */
-open func transactionTransfer(tokenAddress: String, toAddress: String, amount: String, transferAssociation: TransferAssociation?)async throws  -> HexEncodedData  {
-    return
-        try  await uniffiRustCallAsync(
-            rustFutureFunc: {
-                uniffi_bedrock_fn_method_safesmartaccount_transaction_transfer(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(tokenAddress),FfiConverterString.lower(toAddress),FfiConverterString.lower(amount),FfiConverterOptionTypeTransferAssociation.lower(transferAssociation)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_u64,
@@ -17575,6 +17669,12 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_safesmartaccount_as_eip191_signer() != 3533) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_method_safesmartaccount_prepare_transaction_transfer() != 46300) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_safesmartaccount_submit_prepared_transaction() != 4381) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_erc4626_deposit() != 4260) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -17585,9 +17685,6 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_permit2_approve() != 15433) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_transfer() != 65523) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_usd_legacy_vault_migrate() != 7207) {
