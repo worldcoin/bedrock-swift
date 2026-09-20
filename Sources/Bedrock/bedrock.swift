@@ -4714,32 +4714,44 @@ public protocol ManifestManagerProtocol: AnyObject, Sendable {
     func listFiles(designator: BackupFileDesignator) async throws  -> [String]
     
     /**
-     * Removes a specific file entry. Triggers a backup sync.
+     * Removes a file from the manifest and syncs the backup.
      *
      * # Errors
-     * - Returns an error if the file does not exist in the backup.
-     * - Returns an error if the remote hash does not match local (remote is ahead).
-     * - Returns an error if serialization fails.
+     * Returns an error if the file is not registered, the remote backup is ahead,
+     * or the remaining files cannot be backed up.
      */
     func removeFile(filePath: String, rootSecret: String, backupKeypairPublicKey: String) async throws 
     
     /**
-     * Replaces all the file entries for a given designator by removing all existing entries for a given designator
-     * and adding a new file.
+     * Replaces a designator's files and syncs the backup when the manifest changes.
      *
      * # Errors
-     * Returns an error if the remote hash does not match local or downstream operations fail.
+     * Returns an error if the remote backup is ahead or the file cannot be backed up.
      */
     func replaceAllFilesForDesignator(designator: BackupFileDesignator, newFilePath: String, rootSecret: String, backupKeypairPublicKey: String) async throws 
     
     /**
-     * Adds a file entry for a given designator. Will trigger a backup sync.
+     * Adds or refreshes a file and syncs the backup when its manifest entry changes.
      *
      * # Errors
-     * - Returns an error if remote hash does not match local (remote is ahead).
-     * - Returns an error if serialization fails.
+     * Returns an error if the remote backup is ahead or the file cannot be backed up.
      */
     func storeFile(designator: BackupFileDesignator, filePath: String, rootSecret: String, backupKeypairPublicKey: String) async throws 
+    
+    /**
+     * Applies file changes in order and syncs the backup if needed.
+     *
+     * Include all changed files, including recreated exports. Other files must
+     * still match their saved checksums. Keep files unchanged until this returns
+     * and serialize calls with other backup writes.
+     *
+     * The local manifest is saved after upload. A lost response or failed local
+     * save can leave the server ahead; resolve that state before retrying.
+     *
+     * # Errors
+     * See [`BackupError`].
+     */
+    func syncChanges(rootSecret: String, backupKeypairPublicKey: String, changes: [BackupFileChange]) async throws 
     
 }
 /**
@@ -4839,12 +4851,11 @@ open func listFiles(designator: BackupFileDesignator)async throws  -> [String]  
 }
     
     /**
-     * Removes a specific file entry. Triggers a backup sync.
+     * Removes a file from the manifest and syncs the backup.
      *
      * # Errors
-     * - Returns an error if the file does not exist in the backup.
-     * - Returns an error if the remote hash does not match local (remote is ahead).
-     * - Returns an error if serialization fails.
+     * Returns an error if the file is not registered, the remote backup is ahead,
+     * or the remaining files cannot be backed up.
      */
 open func removeFile(filePath: String, rootSecret: String, backupKeypairPublicKey: String)async throws   {
     return
@@ -4863,11 +4874,10 @@ open func removeFile(filePath: String, rootSecret: String, backupKeypairPublicKe
 }
     
     /**
-     * Replaces all the file entries for a given designator by removing all existing entries for a given designator
-     * and adding a new file.
+     * Replaces a designator's files and syncs the backup when the manifest changes.
      *
      * # Errors
-     * Returns an error if the remote hash does not match local or downstream operations fail.
+     * Returns an error if the remote backup is ahead or the file cannot be backed up.
      */
 open func replaceAllFilesForDesignator(designator: BackupFileDesignator, newFilePath: String, rootSecret: String, backupKeypairPublicKey: String)async throws   {
     return
@@ -4886,11 +4896,10 @@ open func replaceAllFilesForDesignator(designator: BackupFileDesignator, newFile
 }
     
     /**
-     * Adds a file entry for a given designator. Will trigger a backup sync.
+     * Adds or refreshes a file and syncs the backup when its manifest entry changes.
      *
      * # Errors
-     * - Returns an error if remote hash does not match local (remote is ahead).
-     * - Returns an error if serialization fails.
+     * Returns an error if the remote backup is ahead or the file cannot be backed up.
      */
 open func storeFile(designator: BackupFileDesignator, filePath: String, rootSecret: String, backupKeypairPublicKey: String)async throws   {
     return
@@ -4898,6 +4907,35 @@ open func storeFile(designator: BackupFileDesignator, filePath: String, rootSecr
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_manifestmanager_store_file(
                         self.uniffiCloneHandle(),FfiConverterTypeBackupFileDesignator_lower(designator),FfiConverterString.lower(filePath),FfiConverterString.lower(rootSecret),FfiConverterString.lower(backupKeypairPublicKey)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_void,
+            completeFunc: ffi_bedrock_rust_future_complete_void,
+            freeFunc: ffi_bedrock_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeBackupError_lift
+        )
+}
+    
+    /**
+     * Applies file changes in order and syncs the backup if needed.
+     *
+     * Include all changed files, including recreated exports. Other files must
+     * still match their saved checksums. Keep files unchanged until this returns
+     * and serialize calls with other backup writes.
+     *
+     * The local manifest is saved after upload. A lost response or failed local
+     * save can leave the server ahead; resolve that state before retrying.
+     *
+     * # Errors
+     * See [`BackupError`].
+     */
+open func syncChanges(rootSecret: String, backupKeypairPublicKey: String, changes: [BackupFileChange])async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_manifestmanager_sync_changes(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(rootSecret),FfiConverterString.lower(backupKeypairPublicKey),FfiConverterSequenceTypeBackupFileChange.lower(changes)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_void,
@@ -11964,6 +12002,143 @@ public func FfiConverterTypeBackupFactorKind_lower(_ value: BackupFactorKind) ->
 
 
 /**
+ * A change applied by [`ManifestManager::sync_changes`].
+ */
+
+public enum BackupFileChange: Equatable, Hashable {
+    
+    /**
+     * Adds or refreshes a file from its current contents.
+     */
+    case put(
+        /**
+         * File category.
+         */designator: BackupFileDesignator, 
+        /**
+         * Path relative to the app filesystem.
+         */path: String
+    )
+    /**
+     * Removes a file. Fails if it is not registered.
+     */
+    case remove(
+        /**
+         * Registered path.
+         */path: String
+    )
+    /**
+     * Removes only the entry with the expected designator and recorded BLAKE3 checksum.
+     * Missing entries are a retry-safe no-op; a mismatch rejects the whole batch.
+     * The local file need not exist. Path normalization and matching follow `Remove`.
+     */
+    case removeIfChecksumMatches(
+        /**
+         * Expected file category.
+         */designator: BackupFileDesignator, 
+        /**
+         * Registered path.
+         */path: String, 
+        /**
+         * Expected BLAKE3 checksum recorded in the manifest.
+         */checksumHex: String
+    )
+    /**
+     * Replaces all files for a designator.
+     */
+    case replaceFiles(
+        /**
+         * File category to replace.
+         */designator: BackupFileDesignator, 
+        /**
+         * Paths relative to the app filesystem. Empty removes all files for the designator.
+         */paths: [String]
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension BackupFileChange: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBackupFileChange: FfiConverterRustBuffer {
+    typealias SwiftType = BackupFileChange
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BackupFileChange {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .put(designator: try FfiConverterTypeBackupFileDesignator.read(from: &buf), path: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 2: return .remove(path: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 3: return .removeIfChecksumMatches(designator: try FfiConverterTypeBackupFileDesignator.read(from: &buf), path: try FfiConverterString.read(from: &buf), checksumHex: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 4: return .replaceFiles(designator: try FfiConverterTypeBackupFileDesignator.read(from: &buf), paths: try FfiConverterSequenceString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: BackupFileChange, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .put(designator,path):
+            writeInt(&buf, Int32(1))
+            FfiConverterTypeBackupFileDesignator.write(designator, into: &buf)
+            FfiConverterString.write(path, into: &buf)
+            
+        
+        case let .remove(path):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(path, into: &buf)
+            
+        
+        case let .removeIfChecksumMatches(designator,path,checksumHex):
+            writeInt(&buf, Int32(3))
+            FfiConverterTypeBackupFileDesignator.write(designator, into: &buf)
+            FfiConverterString.write(path, into: &buf)
+            FfiConverterString.write(checksumHex, into: &buf)
+            
+        
+        case let .replaceFiles(designator,paths):
+            writeInt(&buf, Int32(4))
+            FfiConverterTypeBackupFileDesignator.write(designator, into: &buf)
+            FfiConverterSequenceString.write(paths, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupFileChange_lift(_ buf: RustBuffer) throws -> BackupFileChange {
+    return try FfiConverterTypeBackupFileChange.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupFileChange_lower(_ value: BackupFileChange) -> RustBuffer {
+    return FfiConverterTypeBackupFileChange.lower(value)
+}
+
+
+
+/**
  * A global identifier that identifies the type of file.
  */
 
@@ -16913,6 +17088,31 @@ fileprivate struct FfiConverterSequenceTypeBackupEncryptionKey: FfiConverterRust
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeBackupFileChange: FfiConverterRustBuffer {
+    typealias SwiftType = [BackupFileChange]
+
+    public static func write(_ value: [BackupFileChange], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeBackupFileChange.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [BackupFileChange] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [BackupFileChange]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeBackupFileChange.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeBackupReportEncryptionKeyKind: FfiConverterRustBuffer {
     typealias SwiftType = [BackupReportEncryptionKeyKind]
 
@@ -17459,13 +17659,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_manifestmanager_list_files() != 58914) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_manifestmanager_remove_file() != 17096) {
+    if (uniffi_bedrock_checksum_method_manifestmanager_remove_file() != 39909) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_manifestmanager_replace_all_files_for_designator() != 35086) {
+    if (uniffi_bedrock_checksum_method_manifestmanager_replace_all_files_for_designator() != 25674) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_manifestmanager_store_file() != 26366) {
+    if (uniffi_bedrock_checksum_method_manifestmanager_store_file() != 24711) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_manifestmanager_sync_changes() != 32693) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_backupserviceapi_sync() != 42793) {
