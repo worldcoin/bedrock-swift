@@ -5939,6 +5939,11 @@ public func FfiConverterTypeP256Signer_lower(_ value: P256Signer) -> UInt64 {
  */
 public protocol PreparedTransactionProtocol: AnyObject, Sendable {
     
+    /**
+     * Returns the fee estimate for a prepared self-sponsored operation.
+     */
+    func feeDetails()  -> PreparedTransactionFee?
+    
 }
 /**
  * An unsigned World Chain `UserOperation` prepared for review before signing.
@@ -5995,6 +6000,18 @@ open class PreparedTransaction: PreparedTransactionProtocol, @unchecked Sendable
 
     
 
+    
+    /**
+     * Returns the fee estimate for a prepared self-sponsored operation.
+     */
+open func feeDetails() -> PreparedTransactionFee?  {
+    return try!  FfiConverterOptionTypePreparedTransactionFee.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_bedrock_fn_method_preparedtransaction_fee_details(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
     
 
     
@@ -6534,27 +6551,34 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
     /**
      * Prepares an unsigned ERC-20 transfer on World Chain.
      *
+     * Self-sponsorship verifies that the TFH paymaster's fee-token allowance
+     * established by the wallet migration covers the final fee estimate, and checks
+     * that the fee-token balance covers the transfer and estimated fee.
+     *
      * # Arguments
      * - `token_address`: The address of the ERC-20 token to transfer.
      * - `to_address`: The address of the recipient.
      * - `amount`: The amount of tokens to transfer as a stringified integer with the decimals of the token (e.g. 18 for USDC or WLD)
      * - `transfer_association`: Metadata value. The association of the transfer.
+     * - `custom_bundler_url`: Bundler that estimates and submits the operation,
+     * covering its gas costs. Omit to request sponsorship through the backend.
      *
      * # Errors
      * - Will throw a parsing error if any of the provided attributes are invalid.
-     * - Will throw an RPC error if sponsorship preparation fails.
-     * - Will throw an error if sponsorship is declined.
-     * - Will throw an error if the global HTTP client has not been initialized.
+     * - Will throw an RPC error if sponsorship preparation or custom estimation fails.
+     * - Will throw `InsufficientFunds` if the fee-token balance is too low.
+     * - The backend route requires an initialized global HTTP client.
      */
-    func prepareTransactionTransfer(tokenAddress: String, toAddress: String, amount: String, transferAssociation: TransferAssociation?) async throws  -> PreparedTransaction
+    func prepareTransactionTransfer(tokenAddress: String, toAddress: String, amount: String, transferAssociation: TransferAssociation?, customBundlerUrl: String?) async throws  -> PreparedTransaction
     
     /**
      * Signs and submits a previously prepared transaction on World Chain.
+     * Uses the custom bundler URL retained during preparation when present.
      *
      * # Errors
      * - Will throw an error if the transaction was prepared for another account.
      * - Will throw an RPC error if signing or submission fails.
-     * - Will throw an error if the global HTTP client has not been initialized.
+     * - The backend route requires an initialized global HTTP client.
      */
     func submitPreparedTransaction(preparedTransaction: PreparedTransaction) async throws  -> HexEncodedData
     
@@ -6573,6 +6597,33 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
      * - Returns [`TransactionError::Generic`] if the transaction submission fails.
      */
     func transactionErc4626Deposit(vaultAddress: String, assetAmount: String) async throws  -> HexEncodedData
+    
+    /**
+     * Migrates the full redeemable share balance from one ERC4626 vault to another on World Chain.
+     *
+     * This builds one atomic bundle with:
+     * 1. `redeem(shares)` on the source vault (`shares = min(balanceOf, maxRedeem)`)
+     * 2. `approve(assets)` on the underlying token for the destination vault
+     * 3. `deposit(assets)` into the destination vault
+     *
+     * The `assets` amount is snapshotted with `previewRedeem` when building the transaction,
+     * then reduced by a 0.03% haircut (Morpho SDK default slippage) for approve + deposit.
+     * If more assets are redeemed at execution time, the remainder stays as dust in the Safe.
+     * Destination `previewDeposit` must return a non-zero share amount or building fails.
+     *
+     * If source `maxRedeem < balanceOf`, only the redeemable portion moves; remaining source
+     * shares can be migrated in a later call. Do not gate Morpho V2 destinations on
+     * `maxDeposit` / `maxRedeem` (often 0 by design).
+     *
+     * # Arguments
+     * - `from_vault_address`: The source ERC4626 vault address.
+     * - `to_vault_address`: The destination ERC4626 vault address.
+     *
+     * # Errors
+     * - Returns [`TransactionError::PrimitiveError`] if any argument is invalid.
+     * - Returns [`TransactionError::Generic`] if transaction creation or submission fails.
+     */
+    func transactionErc4626Migrate(fromVaultAddress: String, toVaultAddress: String) async throws  -> HexEncodedData
     
     /**
      * Redeems shares from an ERC4626 vault on World Chain.
@@ -7010,24 +7061,30 @@ open func asEip191Signer() -> Eip191Signer  {
     /**
      * Prepares an unsigned ERC-20 transfer on World Chain.
      *
+     * Self-sponsorship verifies that the TFH paymaster's fee-token allowance
+     * established by the wallet migration covers the final fee estimate, and checks
+     * that the fee-token balance covers the transfer and estimated fee.
+     *
      * # Arguments
      * - `token_address`: The address of the ERC-20 token to transfer.
      * - `to_address`: The address of the recipient.
      * - `amount`: The amount of tokens to transfer as a stringified integer with the decimals of the token (e.g. 18 for USDC or WLD)
      * - `transfer_association`: Metadata value. The association of the transfer.
+     * - `custom_bundler_url`: Bundler that estimates and submits the operation,
+     * covering its gas costs. Omit to request sponsorship through the backend.
      *
      * # Errors
      * - Will throw a parsing error if any of the provided attributes are invalid.
-     * - Will throw an RPC error if sponsorship preparation fails.
-     * - Will throw an error if sponsorship is declined.
-     * - Will throw an error if the global HTTP client has not been initialized.
+     * - Will throw an RPC error if sponsorship preparation or custom estimation fails.
+     * - Will throw `InsufficientFunds` if the fee-token balance is too low.
+     * - The backend route requires an initialized global HTTP client.
      */
-open func prepareTransactionTransfer(tokenAddress: String, toAddress: String, amount: String, transferAssociation: TransferAssociation?)async throws  -> PreparedTransaction  {
+open func prepareTransactionTransfer(tokenAddress: String, toAddress: String, amount: String, transferAssociation: TransferAssociation?, customBundlerUrl: String?)async throws  -> PreparedTransaction  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_safesmartaccount_prepare_transaction_transfer(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(tokenAddress),FfiConverterString.lower(toAddress),FfiConverterString.lower(amount),FfiConverterOptionTypeTransferAssociation.lower(transferAssociation)
+                        self.uniffiCloneHandle(),FfiConverterString.lower(tokenAddress),FfiConverterString.lower(toAddress),FfiConverterString.lower(amount),FfiConverterOptionTypeTransferAssociation.lower(transferAssociation),FfiConverterOptionString.lower(customBundlerUrl)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_u64,
@@ -7040,11 +7097,12 @@ open func prepareTransactionTransfer(tokenAddress: String, toAddress: String, am
     
     /**
      * Signs and submits a previously prepared transaction on World Chain.
+     * Uses the custom bundler URL retained during preparation when present.
      *
      * # Errors
      * - Will throw an error if the transaction was prepared for another account.
      * - Will throw an RPC error if signing or submission fails.
-     * - Will throw an error if the global HTTP client has not been initialized.
+     * - The backend route requires an initialized global HTTP client.
      */
 open func submitPreparedTransaction(preparedTransaction: PreparedTransaction)async throws  -> HexEncodedData  {
     return
@@ -7082,6 +7140,47 @@ open func transactionErc4626Deposit(vaultAddress: String, assetAmount: String)as
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_safesmartaccount_transaction_erc4626_deposit(
                         self.uniffiCloneHandle(),FfiConverterString.lower(vaultAddress),FfiConverterString.lower(assetAmount)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_u64,
+            completeFunc: ffi_bedrock_rust_future_complete_u64,
+            freeFunc: ffi_bedrock_rust_future_free_u64,
+            liftFunc: FfiConverterTypeHexEncodedData_lift,
+            errorHandler: FfiConverterTypeTransactionError_lift
+        )
+}
+    
+    /**
+     * Migrates the full redeemable share balance from one ERC4626 vault to another on World Chain.
+     *
+     * This builds one atomic bundle with:
+     * 1. `redeem(shares)` on the source vault (`shares = min(balanceOf, maxRedeem)`)
+     * 2. `approve(assets)` on the underlying token for the destination vault
+     * 3. `deposit(assets)` into the destination vault
+     *
+     * The `assets` amount is snapshotted with `previewRedeem` when building the transaction,
+     * then reduced by a 0.03% haircut (Morpho SDK default slippage) for approve + deposit.
+     * If more assets are redeemed at execution time, the remainder stays as dust in the Safe.
+     * Destination `previewDeposit` must return a non-zero share amount or building fails.
+     *
+     * If source `maxRedeem < balanceOf`, only the redeemable portion moves; remaining source
+     * shares can be migrated in a later call. Do not gate Morpho V2 destinations on
+     * `maxDeposit` / `maxRedeem` (often 0 by design).
+     *
+     * # Arguments
+     * - `from_vault_address`: The source ERC4626 vault address.
+     * - `to_vault_address`: The destination ERC4626 vault address.
+     *
+     * # Errors
+     * - Returns [`TransactionError::PrimitiveError`] if any argument is invalid.
+     * - Returns [`TransactionError::Generic`] if transaction creation or submission fails.
+     */
+open func transactionErc4626Migrate(fromVaultAddress: String, toVaultAddress: String)async throws  -> HexEncodedData  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_safesmartaccount_transaction_erc4626_migrate(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(fromVaultAddress),FfiConverterString.lower(toVaultAddress)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_u64,
@@ -8722,6 +8821,11 @@ public func FfiConverterTypeTurnkey_lower(_ value: Turnkey) -> UInt64 {
 public protocol TurnkeyManagerProtocol: AnyObject, Sendable {
     
     /**
+     * Deletes a legacy sync-factor user after its replacement is registered. Safe to retry.
+     */
+    func deleteReplacedSyncFactor(suborganizationId: String, legacyUserId: String, syncFactor: P256Signer) async throws 
+    
+    /**
      * Reviews the Turnkey account state and applies any required migrations to
      * bring the user's sub-organization in line with the expected configuration.
      *
@@ -8820,6 +8924,25 @@ public convenience init() {
 
     
 
+    
+    /**
+     * Deletes a legacy sync-factor user after its replacement is registered. Safe to retry.
+     */
+open func deleteReplacedSyncFactor(suborganizationId: String, legacyUserId: String, syncFactor: P256Signer)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_turnkeymanager_delete_replaced_sync_factor(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(suborganizationId),FfiConverterString.lower(legacyUserId),FfiConverterTypeP256Signer_lower(syncFactor)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_void,
+            completeFunc: ffi_bedrock_rust_future_complete_void,
+            freeFunc: ffi_bedrock_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeTurnkeyMigrationError_lift
+        )
+}
     
     /**
      * Reviews the Turnkey account state and applies any required migrations to
@@ -10359,6 +10482,95 @@ public func FfiConverterTypeMigrationRunSummary_lift(_ buf: RustBuffer) throws -
 #endif
 public func FfiConverterTypeMigrationRunSummary_lower(_ value: MigrationRunSummary) -> RustBuffer {
     return FfiConverterTypeMigrationRunSummary.lower(value)
+}
+
+
+/**
+ * ERC-20 fee estimate for a prepared self-sponsored operation.
+ */
+public struct PreparedTransactionFee: Equatable, Hashable {
+    /**
+     * Fee token address.
+     */
+    public var tokenAddress: String
+    /**
+     * Paymaster that charges the fee token.
+     */
+    public var paymasterAddress: String
+    /**
+     * Final fee estimate in token base units, as a decimal integer.
+     */
+    public var estimatedCostInToken: String
+    /**
+     * Policy reason the user pays the fee.
+     */
+    public var declineReason: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Fee token address.
+         */tokenAddress: String, 
+        /**
+         * Paymaster that charges the fee token.
+         */paymasterAddress: String, 
+        /**
+         * Final fee estimate in token base units, as a decimal integer.
+         */estimatedCostInToken: String, 
+        /**
+         * Policy reason the user pays the fee.
+         */declineReason: String) {
+        self.tokenAddress = tokenAddress
+        self.paymasterAddress = paymasterAddress
+        self.estimatedCostInToken = estimatedCostInToken
+        self.declineReason = declineReason
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension PreparedTransactionFee: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePreparedTransactionFee: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PreparedTransactionFee {
+        return
+            try PreparedTransactionFee(
+                tokenAddress: FfiConverterString.read(from: &buf), 
+                paymasterAddress: FfiConverterString.read(from: &buf), 
+                estimatedCostInToken: FfiConverterString.read(from: &buf), 
+                declineReason: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: PreparedTransactionFee, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.tokenAddress, into: &buf)
+        FfiConverterString.write(value.paymasterAddress, into: &buf)
+        FfiConverterString.write(value.estimatedCostInToken, into: &buf)
+        FfiConverterString.write(value.declineReason, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePreparedTransactionFee_lift(_ buf: RustBuffer) throws -> PreparedTransactionFee {
+    return try FfiConverterTypePreparedTransactionFee.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePreparedTransactionFee_lower(_ value: PreparedTransactionFee) -> RustBuffer {
+    return FfiConverterTypePreparedTransactionFee.lower(value)
 }
 
 
@@ -15949,6 +16161,14 @@ enum TransactionError: Swift.Error, Equatable, Hashable, Foundation.LocalizedErr
     case PrimitiveError(String
     )
     /**
+     * The fee-token balance cannot cover the transfer and estimated network fee.
+     */
+    case InsufficientFunds(
+        /**
+         * Token whose balance is insufficient.
+         */tokenAddress: String
+    )
+    /**
      * A generic error that can wrap any anyhow error.
      */
     case Generic(
@@ -15993,10 +16213,13 @@ public struct FfiConverterTypeTransactionError: FfiConverterRustBuffer {
         case 1: return .PrimitiveError(
             try FfiConverterString.read(from: &buf)
             )
-        case 2: return .Generic(
+        case 2: return .InsufficientFunds(
+            tokenAddress: try FfiConverterString.read(from: &buf)
+            )
+        case 3: return .Generic(
             errorMessage: try FfiConverterString.read(from: &buf)
             )
-        case 3: return .FileSystem(
+        case 4: return .FileSystem(
             try FfiConverterTypeFileSystemError.read(from: &buf)
             )
 
@@ -16016,13 +16239,18 @@ public struct FfiConverterTypeTransactionError: FfiConverterRustBuffer {
             FfiConverterString.write(v1, into: &buf)
             
         
-        case let .Generic(errorMessage):
+        case let .InsufficientFunds(tokenAddress):
             writeInt(&buf, Int32(2))
+            FfiConverterString.write(tokenAddress, into: &buf)
+            
+        
+        case let .Generic(errorMessage):
+            writeInt(&buf, Int32(3))
             FfiConverterString.write(errorMessage, into: &buf)
             
         
         case let .FileSystem(v1):
-            writeInt(&buf, Int32(3))
+            writeInt(&buf, Int32(4))
             FfiConverterTypeFileSystemError.write(v1, into: &buf)
             
         }
@@ -16809,6 +17037,30 @@ fileprivate struct FfiConverterOptionTypeSafeSmartAccount: FfiConverterRustBuffe
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeSafeSmartAccount.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypePreparedTransactionFee: FfiConverterRustBuffer {
+    typealias SwiftType = PreparedTransactionFee?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypePreparedTransactionFee.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypePreparedTransactionFee.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -17692,6 +17944,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_turnkey_stamp_with_backup_account_key() != 21059) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_method_turnkeymanager_delete_replaced_sync_factor() != 55463) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_method_turnkeymanager_run_migrations() != 64849) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -17872,13 +18127,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_safesmartaccount_as_eip191_signer() != 3533) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_prepare_transaction_transfer() != 46300) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_prepare_transaction_transfer() != 285) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_submit_prepared_transaction() != 4381) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_submit_prepared_transaction() != 21517) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_erc4626_deposit() != 4260) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_erc4626_migrate() != 48739) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_erc4626_redeem() != 15823) {
@@ -17921,6 +18179,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_eoasigner_as_eip191_signer() != 42772) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_preparedtransaction_fee_details() != 33779) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_constructor_backupmanager_new() != 17248) {
