@@ -6567,7 +6567,7 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
      * - Will throw a parsing error if any of the provided attributes are invalid.
      * - Will throw an RPC error if sponsorship preparation or custom estimation fails.
      * - Will throw `InsufficientFunds` if the fee-token balance is too low.
-     * - The backend route requires an initialized global HTTP client.
+     * - Will throw `AddressRestricted` or `ScreeningUnavailable` for screening rejections or outages.
      */
     func prepareTransactionTransfer(tokenAddress: String, toAddress: String, amount: String, transferAssociation: TransferAssociation?, customBundlerUrl: String?) async throws  -> PreparedTransaction
     
@@ -7077,7 +7077,7 @@ open func asEip191Signer() -> Eip191Signer  {
      * - Will throw a parsing error if any of the provided attributes are invalid.
      * - Will throw an RPC error if sponsorship preparation or custom estimation fails.
      * - Will throw `InsufficientFunds` if the fee-token balance is too low.
-     * - The backend route requires an initialized global HTTP client.
+     * - Will throw `AddressRestricted` or `ScreeningUnavailable` for screening rejections or outages.
      */
 open func prepareTransactionTransfer(tokenAddress: String, toAddress: String, amount: String, transferAssociation: TransferAssociation?, customBundlerUrl: String?)async throws  -> PreparedTransaction  {
     return
@@ -16169,6 +16169,14 @@ enum TransactionError: Swift.Error, Equatable, Hashable, Foundation.LocalizedErr
          */tokenAddress: String
     )
     /**
+     * A transfer participant is restricted; do not retry through another route.
+     */
+    case AddressRestricted
+    /**
+     * Address screening is unavailable; preparation may be retried.
+     */
+    case ScreeningUnavailable
+    /**
      * A generic error that can wrap any anyhow error.
      */
     case Generic(
@@ -16216,10 +16224,12 @@ public struct FfiConverterTypeTransactionError: FfiConverterRustBuffer {
         case 2: return .InsufficientFunds(
             tokenAddress: try FfiConverterString.read(from: &buf)
             )
-        case 3: return .Generic(
+        case 3: return .AddressRestricted
+        case 4: return .ScreeningUnavailable
+        case 5: return .Generic(
             errorMessage: try FfiConverterString.read(from: &buf)
             )
-        case 4: return .FileSystem(
+        case 6: return .FileSystem(
             try FfiConverterTypeFileSystemError.read(from: &buf)
             )
 
@@ -16244,13 +16254,21 @@ public struct FfiConverterTypeTransactionError: FfiConverterRustBuffer {
             FfiConverterString.write(tokenAddress, into: &buf)
             
         
-        case let .Generic(errorMessage):
+        case .AddressRestricted:
             writeInt(&buf, Int32(3))
+        
+        
+        case .ScreeningUnavailable:
+            writeInt(&buf, Int32(4))
+        
+        
+        case let .Generic(errorMessage):
+            writeInt(&buf, Int32(5))
             FfiConverterString.write(errorMessage, into: &buf)
             
         
         case let .FileSystem(v1):
-            writeInt(&buf, Int32(4))
+            writeInt(&buf, Int32(6))
             FfiConverterTypeFileSystemError.write(v1, into: &buf)
             
         }
@@ -18127,7 +18145,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_safesmartaccount_as_eip191_signer() != 3533) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_prepare_transaction_transfer() != 285) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_prepare_transaction_transfer() != 36121) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_submit_prepared_transaction() != 21517) {
