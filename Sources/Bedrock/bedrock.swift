@@ -15419,6 +15419,14 @@ enum RpcError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
          */errorMessage: String
     )
     /**
+     * The fee-token balance cannot cover the network fee.
+     */
+    case InsufficientFunds(
+        /**
+         * Token whose balance is insufficient.
+         */tokenAddress: String
+    )
+    /**
      * Invalid response format
      */
     case InvalidResponse(
@@ -15498,23 +15506,26 @@ public struct FfiConverterTypeRpcError: FfiConverterRustBuffer {
             code: try FfiConverterInt64.read(from: &buf), 
             errorMessage: try FfiConverterString.read(from: &buf)
             )
-        case 4: return .InvalidResponse(
+        case 4: return .InsufficientFunds(
+            tokenAddress: try FfiConverterString.read(from: &buf)
+            )
+        case 5: return .InvalidResponse(
             errorMessage: try FfiConverterString.read(from: &buf)
             )
-        case 5: return .HttpClientNotInitialized
-        case 6: return .InvalidUrl(
+        case 6: return .HttpClientNotInitialized
+        case 7: return .InvalidUrl(
             errorMessage: try FfiConverterString.read(from: &buf)
             )
-        case 7: return .PrimitiveError(
+        case 8: return .PrimitiveError(
             try FfiConverterString.read(from: &buf)
             )
-        case 8: return .SafeSmartAccountError(
+        case 9: return .SafeSmartAccountError(
             try FfiConverterString.read(from: &buf)
             )
-        case 9: return .Generic(
+        case 10: return .Generic(
             errorMessage: try FfiConverterString.read(from: &buf)
             )
-        case 10: return .FileSystem(
+        case 11: return .FileSystem(
             try FfiConverterTypeFileSystemError.read(from: &buf)
             )
 
@@ -15544,37 +15555,42 @@ public struct FfiConverterTypeRpcError: FfiConverterRustBuffer {
             FfiConverterString.write(errorMessage, into: &buf)
             
         
-        case let .InvalidResponse(errorMessage):
+        case let .InsufficientFunds(tokenAddress):
             writeInt(&buf, Int32(4))
+            FfiConverterString.write(tokenAddress, into: &buf)
+            
+        
+        case let .InvalidResponse(errorMessage):
+            writeInt(&buf, Int32(5))
             FfiConverterString.write(errorMessage, into: &buf)
             
         
         case .HttpClientNotInitialized:
-            writeInt(&buf, Int32(5))
+            writeInt(&buf, Int32(6))
         
         
         case let .InvalidUrl(errorMessage):
-            writeInt(&buf, Int32(6))
+            writeInt(&buf, Int32(7))
             FfiConverterString.write(errorMessage, into: &buf)
             
         
         case let .PrimitiveError(v1):
-            writeInt(&buf, Int32(7))
-            FfiConverterString.write(v1, into: &buf)
-            
-        
-        case let .SafeSmartAccountError(v1):
             writeInt(&buf, Int32(8))
             FfiConverterString.write(v1, into: &buf)
             
         
-        case let .Generic(errorMessage):
+        case let .SafeSmartAccountError(v1):
             writeInt(&buf, Int32(9))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .Generic(errorMessage):
+            writeInt(&buf, Int32(10))
             FfiConverterString.write(errorMessage, into: &buf)
             
         
         case let .FileSystem(v1):
-            writeInt(&buf, Int32(10))
+            writeInt(&buf, Int32(11))
             FfiConverterTypeFileSystemError.write(v1, into: &buf)
             
         }
