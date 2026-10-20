@@ -6599,9 +6599,12 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
     func transactionErc4626Deposit(vaultAddress: String, assetAmount: String) async throws  -> HexEncodedData
     
     /**
-     * Migrates the full redeemable share balance from one ERC4626 vault to another on World Chain.
+     * Migrates a savings position into an ERC4626 vault on World Chain.
      *
-     * This builds one atomic bundle with:
+     * The source is chosen from `from_vault_address`: the legacy `WLDVault`, a legacy
+     * `USDVault` (both moved in full), or any other address, treated as an ERC4626 vault.
+     *
+     * For an ERC4626 source this builds one atomic bundle with:
      * 1. `redeem(shares)` on the source vault (`shares = min(balanceOf, maxRedeem)`)
      * 2. `approve(assets)` on the underlying token for the destination vault
      * 3. `deposit(assets)` into the destination vault
@@ -6615,15 +6618,28 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
      * shares can be migrated in a later call. Do not gate Morpho V2 destinations on
      * `maxDeposit` / `maxRedeem` (often 0 by design).
      *
+     * Legacy sources have no `maxRedeem` cap or haircut. `USDVault` redeems all sDAI at the
+     * DSR rate (the amount is also `amountOutMin`) using a Permit2 signature valid for
+     * 3 minutes. The vault only redeems for accounts still verified in the World ID address
+     * book (`Cannot migrate - address verification expired ...`), and some deployments only
+     * redeem what the account deposited through them (`Cannot migrate - USDVault only redeems
+     * up to ...`); both are checked up front.
+     *
+     * Screens the wallet before construction or Permit2 signing. The default route requires
+     * free V3 sponsorship; a custom bundler estimates and submits a bundler-sponsored operation.
+     *
      * # Arguments
-     * - `from_vault_address`: The source ERC4626 vault address.
+     * - `from_vault_address`: The source vault address (legacy `WLDVault` / `USDVault` or ERC4626).
      * - `to_vault_address`: The destination ERC4626 vault address.
+     * - `custom_bundler_url`: Optional relayer URL used for both estimation and submission.
      *
      * # Errors
      * - Returns [`TransactionError::PrimitiveError`] if any argument is invalid.
-     * - Returns [`TransactionError::Generic`] if transaction creation or submission fails.
+     * - Returns `AddressRestricted` or `ScreeningUnavailable` when wallet screening fails.
+     * - Returns [`TransactionError::Generic`] if the vaults are the same, the source is not a
+     * supported vault, or transaction creation or submission fails.
      */
-    func transactionErc4626Migrate(fromVaultAddress: String, toVaultAddress: String) async throws  -> HexEncodedData
+    func transactionErc4626Migrate(fromVaultAddress: String, toVaultAddress: String, customBundlerUrl: String?) async throws  -> HexEncodedData
     
     /**
      * Redeems shares from an ERC4626 vault on World Chain.
@@ -7151,9 +7167,12 @@ open func transactionErc4626Deposit(vaultAddress: String, assetAmount: String)as
 }
     
     /**
-     * Migrates the full redeemable share balance from one ERC4626 vault to another on World Chain.
+     * Migrates a savings position into an ERC4626 vault on World Chain.
      *
-     * This builds one atomic bundle with:
+     * The source is chosen from `from_vault_address`: the legacy `WLDVault`, a legacy
+     * `USDVault` (both moved in full), or any other address, treated as an ERC4626 vault.
+     *
+     * For an ERC4626 source this builds one atomic bundle with:
      * 1. `redeem(shares)` on the source vault (`shares = min(balanceOf, maxRedeem)`)
      * 2. `approve(assets)` on the underlying token for the destination vault
      * 3. `deposit(assets)` into the destination vault
@@ -7167,20 +7186,33 @@ open func transactionErc4626Deposit(vaultAddress: String, assetAmount: String)as
      * shares can be migrated in a later call. Do not gate Morpho V2 destinations on
      * `maxDeposit` / `maxRedeem` (often 0 by design).
      *
+     * Legacy sources have no `maxRedeem` cap or haircut. `USDVault` redeems all sDAI at the
+     * DSR rate (the amount is also `amountOutMin`) using a Permit2 signature valid for
+     * 3 minutes. The vault only redeems for accounts still verified in the World ID address
+     * book (`Cannot migrate - address verification expired ...`), and some deployments only
+     * redeem what the account deposited through them (`Cannot migrate - USDVault only redeems
+     * up to ...`); both are checked up front.
+     *
+     * Screens the wallet before construction or Permit2 signing. The default route requires
+     * free V3 sponsorship; a custom bundler estimates and submits a bundler-sponsored operation.
+     *
      * # Arguments
-     * - `from_vault_address`: The source ERC4626 vault address.
+     * - `from_vault_address`: The source vault address (legacy `WLDVault` / `USDVault` or ERC4626).
      * - `to_vault_address`: The destination ERC4626 vault address.
+     * - `custom_bundler_url`: Optional relayer URL used for both estimation and submission.
      *
      * # Errors
      * - Returns [`TransactionError::PrimitiveError`] if any argument is invalid.
-     * - Returns [`TransactionError::Generic`] if transaction creation or submission fails.
+     * - Returns `AddressRestricted` or `ScreeningUnavailable` when wallet screening fails.
+     * - Returns [`TransactionError::Generic`] if the vaults are the same, the source is not a
+     * supported vault, or transaction creation or submission fails.
      */
-open func transactionErc4626Migrate(fromVaultAddress: String, toVaultAddress: String)async throws  -> HexEncodedData  {
+open func transactionErc4626Migrate(fromVaultAddress: String, toVaultAddress: String, customBundlerUrl: String?)async throws  -> HexEncodedData  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_safesmartaccount_transaction_erc4626_migrate(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(fromVaultAddress),FfiConverterString.lower(toVaultAddress)
+                        self.uniffiCloneHandle(),FfiConverterString.lower(fromVaultAddress),FfiConverterString.lower(toVaultAddress),FfiConverterOptionString.lower(customBundlerUrl)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_u64,
@@ -18170,7 +18202,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_erc4626_deposit() != 4260) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_erc4626_migrate() != 48739) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_erc4626_migrate() != 7037) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_erc4626_redeem() != 15823) {
