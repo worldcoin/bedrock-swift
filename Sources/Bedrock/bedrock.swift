@@ -6549,6 +6549,57 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
     func asEip191Signer()  -> Eip191Signer
     
     /**
+     * Prepares an unsigned ERC-4626 deposit on World Chain.
+     *
+     * Returns the deposited asset amount for confirmation, capped by the wallet's balance.
+     * User-paid gas requires a remaining fee-token balance and the paymaster allowance
+     * maintained by wallet migration. The amount is not reduced to pay the network fee.
+     * `custom_bundler_url` selects a bundler that covers gas and handles submission.
+     *
+     * # Arguments
+     * - `vault_address`: The ERC-4626 vault to deposit into.
+     * - `asset_amount`: The underlying asset amount as an integer in token base units.
+     * - `custom_bundler_url`: Bundler that estimates and submits the operation,
+     * covering its gas costs. Omit to request sponsorship through the backend.
+     *
+     * # Errors
+     * - `PrimitiveError` if the vault address or amount cannot be parsed.
+     * - `InsufficientFunds` if the fee-token balance cannot cover the deposit and
+     * estimated network fee, or the fee alone when depositing another asset.
+     * - `AddressRestricted` or `ScreeningUnavailable` for wallet screening
+     * rejections or outages.
+     * - `Generic` if construction, sponsorship, custom estimation, or fee-token
+     * allowance validation fails.
+     */
+    func prepareTransactionErc4626Deposit(vaultAddress: String, assetAmount: String, customBundlerUrl: String?) async throws  -> PreparedVaultTransaction
+    
+    /**
+     * Prepares an unsigned ERC-4626 withdrawal on World Chain.
+     *
+     * Uses redeem when the requested assets require more shares than the wallet holds.
+     * In that case, `asset_amount` is the previewed redemption output and can change
+     * before execution. User-paid gas requires fee tokens already in the wallet;
+     * the paymaster charges before the vault releases assets.
+     * `custom_bundler_url` selects a bundler that covers gas and handles submission.
+     *
+     * # Arguments
+     * - `vault_address`: The ERC-4626 vault to withdraw from.
+     * - `asset_amount`: The underlying asset amount as an integer in token base units.
+     * - `custom_bundler_url`: Bundler that estimates and submits the operation,
+     * covering its gas costs. Omit to request sponsorship through the backend.
+     *
+     * # Errors
+     * - `PrimitiveError` if the vault address or amount cannot be parsed.
+     * - `InsufficientFunds` if the wallet's fee-token balance cannot cover the
+     * estimated network fee before the withdrawal executes.
+     * - `AddressRestricted` or `ScreeningUnavailable` for wallet screening
+     * rejections or outages.
+     * - `Generic` if construction, preview, RPC calls, sponsorship, custom
+     * estimation, or fee-token allowance validation fails.
+     */
+    func prepareTransactionErc4626Withdraw(vaultAddress: String, assetAmount: String, customBundlerUrl: String?) async throws  -> PreparedVaultTransaction
+    
+    /**
      * Prepares an unsigned ERC-20 transfer on World Chain.
      *
      * Self-sponsorship verifies that the TFH paymaster's fee-token allowance
@@ -6694,6 +6745,29 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
      * - Will throw an error if the global HTTP client has not been initialized.
      */
     func transactionPermit2Approve(tokenAddress: String, spenderAddress: String, amount: String, expiration: String) async throws  -> HexEncodedData
+    
+    /**
+     * Redeems one or more Universal uAssets for USDC on World Chain atomically.
+     *
+     * Use the trusted `contractAddress` from the backend's redemption status and
+     * only holdings marked redeemable. Pass their accepted `amount` and quoted
+     * `usdcAmount` as each redemption's amount and minimum payout respectively.
+     * Exact-amount approvals and redemptions execute together through `MultiSend`;
+     * any failed call reverts the entire batch. Balances and quotes are not refreshed
+     * or silently adjusted here. Sponsorship/gas limits may constrain batch size.
+     * Screens the wallet before signing. With `custom_bundler_url`, the selected
+     * bundler estimates and submits a bundler-sponsored operation. Otherwise,
+     * requires free V3 sponsorship and rejects paid sponsorship responses.
+     * The wallet never pays a token fee here.
+     *
+     * Returns a user-operation hash upon submission, not confirmation of execution.
+     * Wait for a successful receipt before displaying success or refreshing holdings.
+     *
+     * # Errors
+     * Returns a parsing/validation or screening error, or `Generic` if
+     * sponsorship, signing, or submission fails.
+     */
+    func transactionUassetRedeem(vaultAddress: String, redemptions: [UAssetRedemption], customBundlerUrl: String?) async throws  -> HexEncodedData
     
     /**
      * Migrates assets from a USD Vault to an ERC4626 vault on World Chain.
@@ -7075,6 +7149,85 @@ open func asEip191Signer() -> Eip191Signer  {
 }
     
     /**
+     * Prepares an unsigned ERC-4626 deposit on World Chain.
+     *
+     * Returns the deposited asset amount for confirmation, capped by the wallet's balance.
+     * User-paid gas requires a remaining fee-token balance and the paymaster allowance
+     * maintained by wallet migration. The amount is not reduced to pay the network fee.
+     * `custom_bundler_url` selects a bundler that covers gas and handles submission.
+     *
+     * # Arguments
+     * - `vault_address`: The ERC-4626 vault to deposit into.
+     * - `asset_amount`: The underlying asset amount as an integer in token base units.
+     * - `custom_bundler_url`: Bundler that estimates and submits the operation,
+     * covering its gas costs. Omit to request sponsorship through the backend.
+     *
+     * # Errors
+     * - `PrimitiveError` if the vault address or amount cannot be parsed.
+     * - `InsufficientFunds` if the fee-token balance cannot cover the deposit and
+     * estimated network fee, or the fee alone when depositing another asset.
+     * - `AddressRestricted` or `ScreeningUnavailable` for wallet screening
+     * rejections or outages.
+     * - `Generic` if construction, sponsorship, custom estimation, or fee-token
+     * allowance validation fails.
+     */
+open func prepareTransactionErc4626Deposit(vaultAddress: String, assetAmount: String, customBundlerUrl: String?)async throws  -> PreparedVaultTransaction  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_safesmartaccount_prepare_transaction_erc4626_deposit(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(vaultAddress),FfiConverterString.lower(assetAmount),FfiConverterOptionString.lower(customBundlerUrl)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
+            completeFunc: ffi_bedrock_rust_future_complete_rust_buffer,
+            freeFunc: ffi_bedrock_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypePreparedVaultTransaction_lift,
+            errorHandler: FfiConverterTypeTransactionError_lift
+        )
+}
+    
+    /**
+     * Prepares an unsigned ERC-4626 withdrawal on World Chain.
+     *
+     * Uses redeem when the requested assets require more shares than the wallet holds.
+     * In that case, `asset_amount` is the previewed redemption output and can change
+     * before execution. User-paid gas requires fee tokens already in the wallet;
+     * the paymaster charges before the vault releases assets.
+     * `custom_bundler_url` selects a bundler that covers gas and handles submission.
+     *
+     * # Arguments
+     * - `vault_address`: The ERC-4626 vault to withdraw from.
+     * - `asset_amount`: The underlying asset amount as an integer in token base units.
+     * - `custom_bundler_url`: Bundler that estimates and submits the operation,
+     * covering its gas costs. Omit to request sponsorship through the backend.
+     *
+     * # Errors
+     * - `PrimitiveError` if the vault address or amount cannot be parsed.
+     * - `InsufficientFunds` if the wallet's fee-token balance cannot cover the
+     * estimated network fee before the withdrawal executes.
+     * - `AddressRestricted` or `ScreeningUnavailable` for wallet screening
+     * rejections or outages.
+     * - `Generic` if construction, preview, RPC calls, sponsorship, custom
+     * estimation, or fee-token allowance validation fails.
+     */
+open func prepareTransactionErc4626Withdraw(vaultAddress: String, assetAmount: String, customBundlerUrl: String?)async throws  -> PreparedVaultTransaction  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_safesmartaccount_prepare_transaction_erc4626_withdraw(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(vaultAddress),FfiConverterString.lower(assetAmount),FfiConverterOptionString.lower(customBundlerUrl)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
+            completeFunc: ffi_bedrock_rust_future_complete_rust_buffer,
+            freeFunc: ffi_bedrock_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypePreparedVaultTransaction_lift,
+            errorHandler: FfiConverterTypeTransactionError_lift
+        )
+}
+    
+    /**
      * Prepares an unsigned ERC-20 transfer on World Chain.
      *
      * Self-sponsorship verifies that the TFH paymaster's fee-token allowance
@@ -7309,6 +7462,43 @@ open func transactionPermit2Approve(tokenAddress: String, spenderAddress: String
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_safesmartaccount_transaction_permit2_approve(
                         self.uniffiCloneHandle(),FfiConverterString.lower(tokenAddress),FfiConverterString.lower(spenderAddress),FfiConverterString.lower(amount),FfiConverterString.lower(expiration)
+                )
+            },
+            pollFunc: ffi_bedrock_rust_future_poll_u64,
+            completeFunc: ffi_bedrock_rust_future_complete_u64,
+            freeFunc: ffi_bedrock_rust_future_free_u64,
+            liftFunc: FfiConverterTypeHexEncodedData_lift,
+            errorHandler: FfiConverterTypeTransactionError_lift
+        )
+}
+    
+    /**
+     * Redeems one or more Universal uAssets for USDC on World Chain atomically.
+     *
+     * Use the trusted `contractAddress` from the backend's redemption status and
+     * only holdings marked redeemable. Pass their accepted `amount` and quoted
+     * `usdcAmount` as each redemption's amount and minimum payout respectively.
+     * Exact-amount approvals and redemptions execute together through `MultiSend`;
+     * any failed call reverts the entire batch. Balances and quotes are not refreshed
+     * or silently adjusted here. Sponsorship/gas limits may constrain batch size.
+     * Screens the wallet before signing. With `custom_bundler_url`, the selected
+     * bundler estimates and submits a bundler-sponsored operation. Otherwise,
+     * requires free V3 sponsorship and rejects paid sponsorship responses.
+     * The wallet never pays a token fee here.
+     *
+     * Returns a user-operation hash upon submission, not confirmation of execution.
+     * Wait for a successful receipt before displaying success or refreshing holdings.
+     *
+     * # Errors
+     * Returns a parsing/validation or screening error, or `Generic` if
+     * sponsorship, signing, or submission fails.
+     */
+open func transactionUassetRedeem(vaultAddress: String, redemptions: [UAssetRedemption], customBundlerUrl: String?)async throws  -> HexEncodedData  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_bedrock_fn_method_safesmartaccount_transaction_uasset_redeem(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(vaultAddress),FfiConverterSequenceTypeUAssetRedemption.lower(redemptions),FfiConverterOptionString.lower(customBundlerUrl)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_u64,
@@ -10607,6 +10797,85 @@ public func FfiConverterTypePreparedTransactionFee_lower(_ value: PreparedTransa
 
 
 /**
+ * An unsigned vault operation and the asset amount to display before confirmation.
+ */
+public struct PreparedVaultTransaction {
+    /**
+     * Pass this operation to `submit_prepared_transaction` after confirmation.
+     */
+    public var transaction: PreparedTransaction
+    /**
+     * Underlying ERC-20 asset address.
+     */
+    public var assetAddress: String
+    /**
+     * Asset amount in base units. Share-based withdrawals report a preparation-time estimate.
+     */
+    public var assetAmount: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Pass this operation to `submit_prepared_transaction` after confirmation.
+         */transaction: PreparedTransaction, 
+        /**
+         * Underlying ERC-20 asset address.
+         */assetAddress: String, 
+        /**
+         * Asset amount in base units. Share-based withdrawals report a preparation-time estimate.
+         */assetAmount: String) {
+        self.transaction = transaction
+        self.assetAddress = assetAddress
+        self.assetAmount = assetAmount
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension PreparedVaultTransaction: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePreparedVaultTransaction: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PreparedVaultTransaction {
+        return
+            try PreparedVaultTransaction(
+                transaction: FfiConverterTypePreparedTransaction.read(from: &buf), 
+                assetAddress: FfiConverterString.read(from: &buf), 
+                assetAmount: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: PreparedVaultTransaction, into buf: inout [UInt8]) {
+        FfiConverterTypePreparedTransaction.write(value.transaction, into: &buf)
+        FfiConverterString.write(value.assetAddress, into: &buf)
+        FfiConverterString.write(value.assetAmount, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePreparedVaultTransaction_lift(_ buf: RustBuffer) throws -> PreparedVaultTransaction {
+    return try FfiConverterTypePreparedVaultTransaction.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePreparedVaultTransaction_lower(_ value: PreparedVaultTransaction) -> RustBuffer {
+    return FfiConverterTypePreparedVaultTransaction.lower(value)
+}
+
+
+/**
  * Response body for retrieve metadata call.
  *
  * # Notes
@@ -10954,6 +11223,87 @@ public func FfiConverterTypeSyncSubmitRequest_lift(_ buf: RustBuffer) throws -> 
 #endif
 public func FfiConverterTypeSyncSubmitRequest_lower(_ value: SyncSubmitRequest) -> RustBuffer {
     return FfiConverterTypeSyncSubmitRequest.lower(value)
+}
+
+
+/**
+ * One accepted uAsset redemption quote, using decimal integer base units.
+ */
+public struct UAssetRedemption: Equatable, Hashable {
+    /**
+     * The uAsset token contract address from the backend's redemption status.
+     */
+    public var tokenAddress: String
+    /**
+     * Amount to redeem in 18-decimal uAsset base units. Must be positive.
+     */
+    public var amount: String
+    /**
+     * Minimum accepted payout in six-decimal USDC base units. Must be positive.
+     * Use the quoted payout accepted by the user to protect against rate reductions.
+     */
+    public var minimumUsdcAmount: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The uAsset token contract address from the backend's redemption status.
+         */tokenAddress: String, 
+        /**
+         * Amount to redeem in 18-decimal uAsset base units. Must be positive.
+         */amount: String, 
+        /**
+         * Minimum accepted payout in six-decimal USDC base units. Must be positive.
+         * Use the quoted payout accepted by the user to protect against rate reductions.
+         */minimumUsdcAmount: String) {
+        self.tokenAddress = tokenAddress
+        self.amount = amount
+        self.minimumUsdcAmount = minimumUsdcAmount
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension UAssetRedemption: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeUAssetRedemption: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UAssetRedemption {
+        return
+            try UAssetRedemption(
+                tokenAddress: FfiConverterString.read(from: &buf), 
+                amount: FfiConverterString.read(from: &buf), 
+                minimumUsdcAmount: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: UAssetRedemption, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.tokenAddress, into: &buf)
+        FfiConverterString.write(value.amount, into: &buf)
+        FfiConverterString.write(value.minimumUsdcAmount, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUAssetRedemption_lift(_ buf: RustBuffer) throws -> UAssetRedemption {
+    return try FfiConverterTypeUAssetRedemption.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUAssetRedemption_lower(_ value: UAssetRedemption) -> RustBuffer {
+    return FfiConverterTypeUAssetRedemption.lower(value)
 }
 
 
@@ -16209,7 +16559,7 @@ enum TransactionError: Swift.Error, Equatable, Hashable, Foundation.LocalizedErr
     case PrimitiveError(String
     )
     /**
-     * The fee-token balance cannot cover the transfer and estimated network fee.
+     * The fee-token balance cannot cover the operation and estimated network fee.
      */
     case InsufficientFunds(
         /**
@@ -16217,7 +16567,7 @@ enum TransactionError: Swift.Error, Equatable, Hashable, Foundation.LocalizedErr
          */tokenAddress: String
     )
     /**
-     * A transfer participant is restricted; do not retry through another route.
+     * A transaction participant is restricted; do not retry through another route.
      */
     case AddressRestricted
     /**
@@ -17381,6 +17731,31 @@ fileprivate struct FfiConverterSequenceTypeMigrationRecordEntry: FfiConverterRus
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeUAssetRedemption: FfiConverterRustBuffer {
+    typealias SwiftType = [UAssetRedemption]
+
+    public static func write(_ value: [UAssetRedemption], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeUAssetRedemption.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [UAssetRedemption] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [UAssetRedemption]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeUAssetRedemption.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeBackupEncryptionKey: FfiConverterRustBuffer {
     typealias SwiftType = [BackupEncryptionKey]
 
@@ -17853,6 +18228,28 @@ public func computeWalletAddressForFreshAccount(eoaAddress: String)throws  -> St
 })
 }
 /**
+ * Encodes a World Chain Safe `executeUserOp` call for an atomic redemption batch.
+ *
+ * The result includes exact-amount token approvals and calls to the vault, wrapped
+ * in a delegatecall to the existing Safe `MultiSend`. USDC is paid to the Safe.
+ * It is not bare vault calldata and must not be sent directly to the vault.
+ * No RPC calls, signing, or submission occur. Use a trusted backend vault address
+ * and only redeemable holdings with the amounts/minimum payouts accepted by the
+ * user. One failed call reverts the entire batch, including all approvals.
+ *
+ * # Errors
+ * Returns `PrimitiveError::InvalidInput` for invalid redemption inputs.
+ */
+public func buildUassetRedemptionCallData(vaultAddress: String, redemptions: [UAssetRedemption])throws  -> HexEncodedData  {
+    return try  FfiConverterTypeHexEncodedData_lift(try rustCallWithError(FfiConverterTypePrimitiveError_lift) {
+        uniffiCallStatus in
+    uniffi_bedrock_fn_func_build_uasset_redemption_call_data(
+        FfiConverterString.lower(vaultAddress),
+        FfiConverterSequenceTypeUAssetRedemption.lower(redemptions),uniffiCallStatus
+    )
+})
+}
+/**
  * Verifies that a bundler RPC endpoint supports the v0.7 `EntryPoint` used by World App.
  *
  * Calls `eth_supportedEntryPoints` on the given URL and checks that the response
@@ -17933,6 +18330,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_func_compute_wallet_address_for_fresh_account() != 20263) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_func_build_uasset_redemption_call_data() != 43363) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_func_verify_bundler_rpc_entrypoint() != 8277) {
@@ -18193,6 +18593,12 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_safesmartaccount_as_eip191_signer() != 3533) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_bedrock_checksum_method_safesmartaccount_prepare_transaction_erc4626_deposit() != 62099) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_safesmartaccount_prepare_transaction_erc4626_withdraw() != 59540) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_bedrock_checksum_method_safesmartaccount_prepare_transaction_transfer() != 36121) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -18212,6 +18618,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_permit2_approve() != 15433) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_uasset_redeem() != 27467) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_transaction_usd_legacy_vault_migrate() != 7207) {
