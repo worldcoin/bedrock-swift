@@ -4391,11 +4391,16 @@ public protocol MigrationControllerProtocol: AnyObject, Sendable {
      * Thread-safe and fail-fast: a concurrent run errors immediately rather
      * than waiting on the process-wide lock.
      *
+     * An explicit namespace adds a `namespace` attribute to controller lifecycle
+     * events, including native processors and wallet migrations. Event names and
+     * message payloads stay unchanged. Omit it to preserve legacy attributes too.
+     * Processor-owned logs, IDs, records and execution are unaffected.
+     *
      * # Errors
      *
      * `InvalidOperation` if another run is already in progress.
      */
-    func runMigrations() async throws  -> MigrationRunSummary
+    func runMigrations(namespace: MigrationNamespace?) async throws  -> MigrationRunSummary
     
 }
 /**
@@ -4515,16 +4520,21 @@ open func listAllRecords()throws  -> [MigrationRecordEntry]  {
      * Thread-safe and fail-fast: a concurrent run errors immediately rather
      * than waiting on the process-wide lock.
      *
+     * An explicit namespace adds a `namespace` attribute to controller lifecycle
+     * events, including native processors and wallet migrations. Event names and
+     * message payloads stay unchanged. Omit it to preserve legacy attributes too.
+     * Processor-owned logs, IDs, records and execution are unaffected.
+     *
      * # Errors
      *
      * `InvalidOperation` if another run is already in progress.
      */
-open func runMigrations()async throws  -> MigrationRunSummary  {
+open func runMigrations(namespace: MigrationNamespace? = nil)async throws  -> MigrationRunSummary  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_bedrock_fn_method_migrationcontroller_run_migrations(
-                        self.uniffiCloneHandle()
+                        self.uniffiCloneHandle(),FfiConverterOptionTypeMigrationNamespace.lower(namespace)
                 )
             },
             pollFunc: ffi_bedrock_rust_future_poll_rust_buffer,
@@ -5810,6 +5820,7 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
      *
      * # Errors
      * - Will throw an error if the user operation is invalid, particularly if any attribute is not valid.
+     * - Will throw an error if the user operation's `sender` is not this Safe.
      * - Will throw an error if the signature process unexpectedly fails.
      * - Will throw an error if the placeholder signature's `validUntil` is 0 or more than
      * 35 minutes (30 plus clock skew) past NTP time.
@@ -5833,7 +5844,7 @@ public protocol SafeSmartAccountProtocol: AnyObject, Sendable {
      *
      * // Crafted by the user, or requested by Mini Apps.
      * let user_op = UnparsedUserOperation {
-     * sender: "0xf1390a26bd60d83a4e38c7be7be1003c616296ad".to_string(),
+     * sender: "0x4564420674EA68fcc61b463C0494807C759d47e6".to_string(),
      * nonce: "0x0".to_string(),
      * call_data: "0x".to_string(),
      * signature: "0x".to_string(),
@@ -6370,6 +6381,7 @@ open func personalSign(chainId: UInt32, message: String)throws  -> HexEncodedDat
      *
      * # Errors
      * - Will throw an error if the user operation is invalid, particularly if any attribute is not valid.
+     * - Will throw an error if the user operation's `sender` is not this Safe.
      * - Will throw an error if the signature process unexpectedly fails.
      * - Will throw an error if the placeholder signature's `validUntil` is 0 or more than
      * 35 minutes (30 plus clock skew) past NTP time.
@@ -6393,7 +6405,7 @@ open func personalSign(chainId: UInt32, message: String)throws  -> HexEncodedDat
      *
      * // Crafted by the user, or requested by Mini Apps.
      * let user_op = UnparsedUserOperation {
-     * sender: "0xf1390a26bd60d83a4e38c7be7be1003c616296ad".to_string(),
+     * sender: "0x4564420674EA68fcc61b463C0494807C759d47e6".to_string(),
      * nonce: "0x0".to_string(),
      * call_data: "0x".to_string(),
      * signature: "0x".to_string(),
@@ -13315,6 +13327,81 @@ public func FfiConverterTypeMigrationError_lower(_ value: MigrationError) -> Rus
 
 
 /**
+ * Classifies migration telemetry without changing execution or readiness.
+ */
+
+public enum MigrationNamespace: Equatable, Hashable {
+    
+    /**
+     * Tasks the host waits for before reporting readiness.
+     */
+    case blocking
+    /**
+     * Tasks the host runs without waiting to report readiness.
+     */
+    case nonBlocking
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension MigrationNamespace: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMigrationNamespace: FfiConverterRustBuffer {
+    typealias SwiftType = MigrationNamespace
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MigrationNamespace {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .blocking
+        
+        case 2: return .nonBlocking
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: MigrationNamespace, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .blocking:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .nonBlocking:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMigrationNamespace_lift(_ buf: RustBuffer) throws -> MigrationNamespace {
+    return try FfiConverterTypeMigrationNamespace.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMigrationNamespace_lower(_ value: MigrationNamespace) -> RustBuffer {
+    return FfiConverterTypeMigrationNamespace.lower(value)
+}
+
+
+
+/**
  * Status of a single migration.
  */
 
@@ -15824,6 +15911,30 @@ fileprivate struct FfiConverterOptionTypePreparedTransactionFee: FfiConverterRus
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeMigrationNamespace: FfiConverterRustBuffer {
+    typealias SwiftType = MigrationNamespace?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeMigrationNamespace.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeMigrationNamespace.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeOs: FfiConverterRustBuffer {
     typealias SwiftType = Os?
 
@@ -16761,7 +16872,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_migrationcontroller_list_all_records() != 31798) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_migrationcontroller_run_migrations() != 55114) {
+    if (uniffi_bedrock_checksum_method_migrationcontroller_run_migrations() != 15218) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_migrationprocessor_migration_id() != 53654) {
@@ -16866,7 +16977,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_bedrock_checksum_method_safesmartaccount_personal_sign() != 39497) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_bedrock_checksum_method_safesmartaccount_sign_4337_op() != 50813) {
+    if (uniffi_bedrock_checksum_method_safesmartaccount_sign_4337_op() != 33669) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_bedrock_checksum_method_safesmartaccount_sign_permit2_transfer() != 20929) {
